@@ -35,7 +35,7 @@ class PolymarketClient:
 
     async def get_active_markets(self, tier: int) -> List[Market]:
         """Get active markets filtered by tier criteria.
-        Tier 1: resolution 1-24h, liquidity > $5K
+        Tier 1: resolution 15m-7d, liquidity > $5K
         Tier 2: crypto markets, 15-min resolution
         """
         try:
@@ -118,7 +118,7 @@ class PolymarketClient:
 
                 # Apply tier filters
                 if tier == 1:
-                    if hours_to_resolution < 1 or hours_to_resolution > 24:
+                    if hours_to_resolution < 0.25 or hours_to_resolution > 168:
                         continue
                     if liquidity < 5000:
                         continue

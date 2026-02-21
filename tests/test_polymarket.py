@@ -143,10 +143,10 @@ class TestGetActiveMarketsTier1:
         assert isinstance(m.keywords, list)
 
     @pytest.mark.asyncio
-    async def test_tier1_excludes_less_than_1h_resolution(self, client):
-        """Markets resolving in <1 hour are excluded from tier 1."""
+    async def test_tier1_excludes_less_than_15min_resolution(self, client):
+        """Markets resolving in <15 minutes are excluded from tier 1."""
         raw = [
-            _make_raw_market(hours_ahead=0.5, liquidity=10_000),
+            _make_raw_market(hours_ahead=0.1, liquidity=10_000),
         ]
         mock_resp = _mock_response(json_data=raw)
         mock_client_instance = AsyncMock()
@@ -160,10 +160,10 @@ class TestGetActiveMarketsTier1:
         assert len(markets) == 0
 
     @pytest.mark.asyncio
-    async def test_tier1_excludes_more_than_24h_resolution(self, client):
-        """Markets resolving in >24 hours are excluded from tier 1."""
+    async def test_tier1_excludes_more_than_7d_resolution(self, client):
+        """Markets resolving in >7 days are excluded from tier 1."""
         raw = [
-            _make_raw_market(hours_ahead=48.0, liquidity=10_000),
+            _make_raw_market(hours_ahead=200.0, liquidity=10_000),
         ]
         mock_resp = _mock_response(json_data=raw)
         mock_client_instance = AsyncMock()
