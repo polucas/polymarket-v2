@@ -1,0 +1,16 @@
+feeds:
+  reuters_top:
+    url: "https://feeds.reuters.com/reuters/topNews"
+    domain: "reuters.com"
+  reuters_business:
+    url: "https://feeds.reuters.com/reuters/businessNews"
+    domain: "reuters.com"
+  ap_top:
+    url: "https://rsshub.app/apnews/topics/apf-topnews"
+    domain: "apnews.com"
+  bbc_world:
+    url: "http://feeds.bbci.co.uk/news/world/rss.xml"
+    domain: "bbc.com"
+  coindesk:
+    url: "https://www.coindesk.com/arc/outboundfeeds/rss/"
+    domain: "coindesk.com"

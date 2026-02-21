@@ -1,0 +1,65 @@
+official_sources:
+  twitter:
+    - "@WhiteHouse"
+    - "@FederalReserve"
+    - "@SECGov"
+    - "@SecYellen"
+    - "@USTreasury"
+  rss_domains:
+    - "federalreserve.gov"
+    - "sec.gov"
+    - "bls.gov"
+    - "whitehouse.gov"
+    - "supremecourt.gov"
+    - "treasury.gov"
+
+wire_services:
+  twitter:
+    - "@Reuters"
+    - "@AP"
+    - "@AFP"
+    - "@BNONews"
+    - "@business"
+  rss_domains:
+    - "reuters.com"
+    - "apnews.com"
+    - "afp.com"
+
+institutional_media:
+  twitter:
+    - "@BBCBreaking"
+    - "@CNN"
+    - "@nytimes"
+    - "@WSJ"
+    - "@CNBC"
+    - "@CoinDesk"
+    - "@TheBlock__"
+  rss_domains:
+    - "bbc.com"
+    - "nytimes.com"
+    - "wsj.com"
+    - "cnbc.com"
+    - "coindesk.com"
+    - "theblock.co"
+
+expert_bio_keywords:
+  - journalist
+  - reporter
+  - editor
+  - correspondent
+  - analyst
+  - researcher
+  - professor
+  - economist
+  - senator
+  - representative
+  - minister
+  - official
+  - ceo
+  - cto
+  - founder
+  - partner
+  - director
+  - crypto
+  - blockchain
+  - defi
