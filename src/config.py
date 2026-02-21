@@ -40,8 +40,11 @@ class Settings(BaseSettings):
     KELLY_FRACTION: float = 0.25
     MAX_CLUSTER_EXPOSURE_PCT: float = 0.12
 
+    # Alerts
+    DAILY_SUMMARY_HOUR_UTC: int = 0  # Hour of day (UTC) to send daily summary
+
     # Initial Bankroll
-    INITIAL_BANKROLL: float = 5000.0
+    INITIAL_BANKROLL: float = 2000.0
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

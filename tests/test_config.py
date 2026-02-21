@@ -25,7 +25,7 @@ class TestSettings:
 
     def test_initial_bankroll_default(self):
         s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
-        assert s.INITIAL_BANKROLL == 5000.0
+        assert s.INITIAL_BANKROLL == 2000.0
 
 
 class TestMonkModeConfig:

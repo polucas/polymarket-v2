@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from src.alerts import format_lifecycle_alert, send_alert
 from src.config import Settings, get_settings
 from src.db.migrations import run_migrations
 from src.db.sqlite import Database
@@ -114,10 +115,12 @@ async def lifespan(app: FastAPI):
     )
 
     log.info("startup_complete")
+    await send_alert(format_lifecycle_alert("STARTED", settings.ENVIRONMENT), settings)
     yield
 
     # Shutdown
     log.info("shutting_down")
+    await send_alert(format_lifecycle_alert("STOPPING", settings.ENVIRONMENT), settings)
     scheduler.stop()
     await db.close()
     log.info("shutdown_complete")

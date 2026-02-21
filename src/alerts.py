@@ -63,3 +63,54 @@ def format_daily_summary(trades: List[TradeRecord], portfolio: Portfolio) -> str
 def format_error_alert(error: str) -> str:
     """Format error alert."""
     return f"<b>ERROR</b>\n{error[:500]}"
+
+
+def format_observe_only_alert(executed: int, cap: int) -> str:
+    """Format observe-only mode notification."""
+    return (
+        f"<b>OBSERVE-ONLY</b>\n"
+        f"Daily cap hit ({executed}/{cap}). Switching to observe-only mode."
+    )
+
+
+def format_monk_mode_alert(reason: str) -> str:
+    """Format Monk Mode trigger alert."""
+    labels = {
+        "daily_loss_limit": "Daily loss limit reached",
+        "weekly_loss_limit": "Weekly loss limit reached",
+        "max_total_exposure": "Max total exposure reached",
+        "api_budget_exceeded": "Daily API budget exceeded",
+    }
+    if reason.startswith("consecutive_adverse"):
+        parts = reason.split("_")
+        count = parts[-1] if parts[-1].isdigit() else "?"
+        label = f"Consecutive adverse trades cooldown ({count} in a row)"
+    elif "daily_cap" in reason:
+        label = "Tier daily cap reached"
+    else:
+        label = labels.get(reason, reason)
+    return (
+        f"<b>MONK MODE</b>\n"
+        f"{label}\n"
+        f"Trade blocked. Waiting for conditions to improve."
+    )
+
+
+def format_tier2_alert(active: bool) -> str:
+    """Format Tier 2 activation/deactivation alert."""
+    if active:
+        return "<b>TIER 2 ACTIVATED</b>\nCrypto news detected. Starting rapid scan cycle."
+    return "<b>TIER 2 DEACTIVATED</b>\nNo new crypto signals for 30 min. Stopping Tier 2."
+
+
+def format_lifecycle_alert(event: str, environment: str) -> str:
+    """Format bot lifecycle (startup/shutdown) alert."""
+    return f"<b>BOT {event.upper()}</b>\nMode: {environment}"
+
+
+def format_stale_scan_alert(minutes_since: float) -> str:
+    """Format stale scan health warning."""
+    return (
+        f"<b>STALE SCAN WARNING</b>\n"
+        f"No scan completed in {minutes_since:.0f} minutes. Check bot health."
+    )

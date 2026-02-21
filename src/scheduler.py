@@ -7,7 +7,15 @@ from typing import List, Optional
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from src.alerts import format_trade_alert, send_alert
+from src.alerts import (
+    format_error_alert,
+    format_monk_mode_alert,
+    format_observe_only_alert,
+    format_stale_scan_alert,
+    format_tier2_alert,
+    format_trade_alert,
+    send_alert,
+)
 from src.config import MonkModeConfig, Settings
 from src.db.sqlite import Database
 from src.engine.execution import execute_trade
@@ -62,6 +70,8 @@ class Scheduler:
         self.last_scan_completed: Optional[datetime] = None
         self._tier2_active = False
         self._tier2_last_signal: Optional[datetime] = None
+        self._observe_only_alerted_today: bool = False
+        self._observe_only_alert_date: Optional[str] = None
 
     def start(self) -> None:
         self._scheduler.add_job(
@@ -83,6 +93,21 @@ class Scheduler:
             "interval",
             minutes=10,
             id="adverse_moves",
+            max_instances=1,
+        )
+        self._scheduler.add_job(
+            self._send_daily_summary,
+            "cron",
+            hour=self._settings.DAILY_SUMMARY_HOUR_UTC,
+            minute=0,
+            id="daily_summary",
+            max_instances=1,
+        )
+        self._scheduler.add_job(
+            self._check_stale_scan,
+            "interval",
+            minutes=15,
+            id="stale_check",
             max_instances=1,
         )
         self._scheduler.start()
@@ -108,12 +133,14 @@ class Scheduler:
                     pass
         except Exception as e:
             log.error("auto_resolve_error", error=str(e))
+            await send_alert(format_error_alert(f"Auto-resolve failed: {e}"), self._settings)
 
     async def _update_adverse(self) -> None:
         try:
             await update_unrealized_adverse_moves(self._db, self._polymarket)
         except Exception as e:
             log.error("adverse_update_error", error=str(e))
+            await send_alert(format_error_alert(f"Adverse move update failed: {e}"), self._settings)
 
     # ------------------------------------------------------------------
     # Tier 2 activation
@@ -143,12 +170,25 @@ class Scheduler:
     async def run_tier1_scan(self) -> None:
         log.info("tier1_scan_start")
         try:
+            # Reset observe-only alert flag at start of new day
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if self._observe_only_alert_date != today_str:
+                self._observe_only_alerted_today = False
+                self._observe_only_alert_date = today_str
+
             today_trades = await self._db.get_today_trades()
             week_trades = await self._db.get_week_trades()
             api_spend = await self._db.get_today_api_spend()
             portfolio = await self._db.load_portfolio()
 
             scan_mode = get_scan_mode(today_trades, self._monk_config)
+            if scan_mode == "observe_only" and not self._observe_only_alerted_today:
+                self._observe_only_alerted_today = True
+                tier1_executed = [t for t in today_trades if t.tier == 1 and t.action != "SKIP"]
+                await send_alert(
+                    format_observe_only_alert(len(tier1_executed), self._monk_config.tier1_daily_trade_cap),
+                    self._settings,
+                )
             log.info("scan_mode", mode=scan_mode)
 
             # Get experiment run ID
@@ -167,7 +207,7 @@ class Scheduler:
 
             # Check Tier 2 activation
             if self.should_activate_tier2(rss_signals) and not self._tier2_active:
-                self._activate_tier2()
+                await self._activate_tier2()
 
             # Process each market
             candidates: List[TradeCandidate] = []
@@ -200,6 +240,7 @@ class Scheduler:
                 )
 
                 # Execute trades
+                monk_alerted_reasons: set = set()
                 for candidate in to_execute:
                     allowed, reason = check_monk_mode(
                         self._monk_config, candidate, portfolio,
@@ -208,6 +249,11 @@ class Scheduler:
                     if not allowed:
                         candidate.skip_reason = reason
                         to_skip.append(candidate)
+                        if reason not in monk_alerted_reasons:
+                            monk_alerted_reasons.add(reason)
+                            await send_alert(
+                                format_monk_mode_alert(reason), self._settings
+                            )
                         continue
 
                     record = await execute_trade(
@@ -231,6 +277,7 @@ class Scheduler:
 
         except Exception as e:
             log.error("tier1_scan_error", error=str(e))
+            await send_alert(format_error_alert(f"Tier 1 scan failed: {e}"), self._settings)
 
     # ------------------------------------------------------------------
     # Tier 2 scan
@@ -282,6 +329,7 @@ class Scheduler:
                     candidates, remaining_cap, portfolio.open_positions, portfolio.total_equity,
                 )
 
+                monk_alerted_reasons: set = set()
                 for candidate in to_execute:
                     allowed, reason = check_monk_mode(
                         self._monk_config, candidate, portfolio,
@@ -290,6 +338,11 @@ class Scheduler:
                     if not allowed:
                         candidate.skip_reason = reason
                         to_skip.append(candidate)
+                        if reason not in monk_alerted_reasons:
+                            monk_alerted_reasons.add(reason)
+                            await send_alert(
+                                format_monk_mode_alert(reason), self._settings
+                            )
                         continue
 
                     record = await execute_trade(
@@ -310,12 +363,13 @@ class Scheduler:
             if self._tier2_last_signal:
                 minutes_since = (now - self._tier2_last_signal).total_seconds() / 60
                 if minutes_since > 30:
-                    self._deactivate_tier2()
+                    await self._deactivate_tier2()
 
             log.info("tier2_scan_complete", markets_scanned=len(markets))
 
         except Exception as e:
             log.error("tier2_scan_error", error=str(e))
+            await send_alert(format_error_alert(f"Tier 2 scan failed: {e}"), self._settings)
 
     # ------------------------------------------------------------------
     # Market processing (shared by both tiers)
@@ -514,7 +568,7 @@ class Scheduler:
         )
         await self._db.save_trade(record)
 
-    def _activate_tier2(self) -> None:
+    async def _activate_tier2(self) -> None:
         if self._tier2_active:
             return
         self._tier2_active = True
@@ -527,8 +581,9 @@ class Scheduler:
             max_instances=1,
         )
         log.info("tier2_activated")
+        await send_alert(format_tier2_alert(active=True), self._settings)
 
-    def _deactivate_tier2(self) -> None:
+    async def _deactivate_tier2(self) -> None:
         if not self._tier2_active:
             return
         self._tier2_active = False
@@ -537,3 +592,34 @@ class Scheduler:
         except Exception:
             pass
         log.info("tier2_deactivated")
+        await send_alert(format_tier2_alert(active=False), self._settings)
+
+    # ------------------------------------------------------------------
+    # Daily summary & stale scan
+    # ------------------------------------------------------------------
+
+    async def _send_daily_summary(self) -> None:
+        """Send daily trade summary via Telegram."""
+        try:
+            from src.alerts import format_daily_summary
+            today_trades = await self._db.get_today_trades()
+            portfolio = await self._db.load_portfolio()
+            message = format_daily_summary(today_trades, portfolio)
+            await send_alert(message, self._settings)
+            log.info("daily_summary_sent", trade_count=len(today_trades))
+        except Exception as e:
+            log.error("daily_summary_error", error=str(e))
+
+    async def _check_stale_scan(self) -> None:
+        """Alert if no scan has completed in >30 minutes."""
+        try:
+            if self.last_scan_completed is None:
+                return  # Still initializing
+            now = datetime.now(timezone.utc)
+            minutes_since = (now - self.last_scan_completed).total_seconds() / 60
+            if minutes_since > 30:
+                await send_alert(
+                    format_stale_scan_alert(minutes_since), self._settings
+                )
+        except Exception as e:
+            log.error("stale_check_error", error=str(e))

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.models import Signal
+from src.models import Portfolio, Signal
 from src.config import Settings, MonkModeConfig
 from src.scheduler import Scheduler
 
@@ -181,3 +181,193 @@ class TestShouldActivateTier2:
             _make_signal(content="sol going up", source_tier="S6", followers=10),
         ]
         assert scheduler.should_activate_tier2(signals) is True
+
+# ---------------------------------------------------------------------------
+# Tests: Daily summary alert
+# ---------------------------------------------------------------------------
+
+
+class TestDailySummaryJob:
+    """Verify _send_daily_summary calls send_alert with a Daily Summary message."""
+
+    @pytest.mark.asyncio
+    async def test_send_daily_summary_calls_send_alert(self):
+        scheduler = _build_scheduler()
+        scheduler._db.get_today_trades.return_value = []
+        scheduler._db.load_portfolio.return_value = Portfolio()
+
+        with patch("src.scheduler.send_alert", new_callable=AsyncMock) as mock_alert:
+            await scheduler._send_daily_summary()
+
+            mock_alert.assert_called_once()
+            message = mock_alert.call_args[0][0]
+            assert "Daily Summary" in message
+
+
+# ---------------------------------------------------------------------------
+# Tests: Stale scan alert
+# ---------------------------------------------------------------------------
+
+
+class TestStaleScanAlert:
+    """Verify _check_stale_scan fires alert only when last_scan_completed is >30 min ago."""
+
+    @pytest.mark.asyncio
+    async def test_alert_sent_when_scan_is_stale(self):
+        """If last_scan_completed is >30 min ago, send_alert should be called."""
+        scheduler = _build_scheduler()
+        scheduler.last_scan_completed = datetime.now(timezone.utc) - timedelta(minutes=45)
+
+        with patch("src.scheduler.send_alert", new_callable=AsyncMock) as mock_alert:
+            await scheduler._check_stale_scan()
+
+            mock_alert.assert_called_once()
+            message = mock_alert.call_args[0][0]
+            assert "STALE SCAN" in message
+
+    @pytest.mark.asyncio
+    async def test_no_alert_when_scan_is_recent(self):
+        """If last_scan_completed is <30 min ago, send_alert should NOT be called."""
+        scheduler = _build_scheduler()
+        scheduler.last_scan_completed = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+        with patch("src.scheduler.send_alert", new_callable=AsyncMock) as mock_alert:
+            await scheduler._check_stale_scan()
+
+            mock_alert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_alert_when_last_scan_is_none(self):
+        """If last_scan_completed is None (still initializing), no alert."""
+        scheduler = _build_scheduler()
+        scheduler.last_scan_completed = None
+
+        with patch("src.scheduler.send_alert", new_callable=AsyncMock) as mock_alert:
+            await scheduler._check_stale_scan()
+
+            mock_alert.assert_not_called()
+
+# ---------------------------------------------------------------------------
+# Tests: Tier 2 activation / deactivation alerts
+# ---------------------------------------------------------------------------
+
+
+class TestTier2Alerts:
+    """Verify _activate_tier2 and _deactivate_tier2 send correct alerts."""
+
+    @pytest.mark.asyncio
+    async def test_activate_tier2_sends_activated_alert(self):
+        scheduler = _build_scheduler()
+
+        with patch("src.scheduler.send_alert", new_callable=AsyncMock) as mock_alert:
+            await scheduler._activate_tier2()
+
+            mock_alert.assert_called_once()
+            message = mock_alert.call_args[0][0]
+            assert "ACTIVATED" in message
+
+    @pytest.mark.asyncio
+    async def test_deactivate_tier2_sends_deactivated_alert(self):
+        scheduler = _build_scheduler()
+        # Must be active first so deactivation proceeds
+        scheduler._tier2_active = True
+
+        with patch("src.scheduler.send_alert", new_callable=AsyncMock) as mock_alert:
+            await scheduler._deactivate_tier2()
+
+            mock_alert.assert_called_once()
+            message = mock_alert.call_args[0][0]
+            assert "DEACTIVATED" in message
+
+    @pytest.mark.asyncio
+    async def test_activate_tier2_noop_when_already_active(self):
+        """Calling _activate_tier2 when already active should not send alert."""
+        scheduler = _build_scheduler()
+        scheduler._tier2_active = True
+
+        with patch("src.scheduler.send_alert", new_callable=AsyncMock) as mock_alert:
+            await scheduler._activate_tier2()
+
+            mock_alert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_deactivate_tier2_noop_when_already_inactive(self):
+        """Calling _deactivate_tier2 when already inactive should not send alert."""
+        scheduler = _build_scheduler()
+        scheduler._tier2_active = False
+
+        with patch("src.scheduler.send_alert", new_callable=AsyncMock) as mock_alert:
+            await scheduler._deactivate_tier2()
+
+            mock_alert.assert_not_called()
+
+# ---------------------------------------------------------------------------
+# Tests: Error alert wiring in _auto_resolve
+# ---------------------------------------------------------------------------
+
+
+class TestErrorAlertWiring:
+    """Verify that when _auto_resolve raises, an error alert is sent."""
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_error_sends_alert(self):
+        scheduler = _build_scheduler()
+
+        with patch(
+            "src.scheduler.auto_resolve_trades",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("db connection lost"),
+        ), patch("src.scheduler.send_alert", new_callable=AsyncMock) as mock_alert:
+            await scheduler._auto_resolve()
+
+            mock_alert.assert_called_once()
+            message = mock_alert.call_args[0][0]
+            assert "ERROR" in message
+            assert "db connection lost" in message
+
+
+# ---------------------------------------------------------------------------
+# Tests: Observe-only alert fires once, not twice
+# ---------------------------------------------------------------------------
+
+
+class TestObserveOnlyAlert:
+    """Verify the observe-only alert fires once per day, not on every scan."""
+
+    @pytest.mark.asyncio
+    async def test_observe_only_alert_fires_once(self):
+        scheduler = _build_scheduler()
+
+        # Build a fake trade that counts as tier-1 executed (action != "SKIP")
+        fake_trade = MagicMock()
+        fake_trade.tier = 1
+        fake_trade.action = "BUY"
+
+        # Return enough trades to exceed the cap so get_scan_mode returns "observe_only"
+        trades = [fake_trade] * 10
+        scheduler._db.get_today_trades.return_value = trades
+        scheduler._db.get_week_trades.return_value = []
+        scheduler._db.get_today_api_spend.return_value = 0.0
+        scheduler._db.load_portfolio.return_value = Portfolio()
+
+        # Mock away everything else in run_tier1_scan that we don't care about
+        scheduler._polymarket.get_active_markets.return_value = []
+        scheduler._rss.get_breaking_news.return_value = []
+
+        with patch(
+            "src.scheduler.get_scan_mode", return_value="observe_only"
+        ), patch(
+            "src.scheduler.send_alert", new_callable=AsyncMock
+        ) as mock_alert, patch(
+            "src.scheduler.get_current_experiment", new_callable=AsyncMock, return_value=None
+        ):
+            # First scan: alert should fire
+            await scheduler.run_tier1_scan()
+            assert mock_alert.call_count == 1
+            message = mock_alert.call_args[0][0]
+            assert "OBSERVE-ONLY" in message
+
+            # Second scan: same day, alert should NOT fire again
+            mock_alert.reset_mock()
+            await scheduler.run_tier1_scan()
+            assert mock_alert.call_count == 0

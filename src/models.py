@@ -310,9 +310,9 @@ class ModelSwapEvent:
 
 @dataclass
 class Portfolio:
-    cash_balance: float = 5000.0
-    total_equity: float = 5000.0
+    cash_balance: float = 2000.0
+    total_equity: float = 2000.0
     total_pnl: float = 0.0
-    peak_equity: float = 5000.0
+    peak_equity: float = 2000.0
     max_drawdown: float = 0.0
     open_positions: List[Position] = field(default_factory=list)
