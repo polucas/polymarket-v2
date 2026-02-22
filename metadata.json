@@ -1,0 +1,48 @@
+{
+  "title": "Polymarket Predictor v2",
+  "databases": {
+    "predictor": {
+      "tables": {
+        "trade_records": { "sort_desc": "timestamp" }
+      },
+      "queries": {
+        "todays_trades": {
+          "title": "Today's trades",
+          "sql": "SELECT timestamp, market_question, market_type, action, ROUND(calculated_edge,4) as edge, ROUND(trade_score,4) as score, position_size_usd, pnl, actual_outcome FROM trade_records WHERE date(timestamp) = date('now') AND action IN ('BUY_YES', 'BUY_NO') ORDER BY timestamp DESC"
+        },
+        "portfolio_overview": {
+          "title": "Portfolio overview",
+          "sql": "SELECT cash_balance, total_equity, total_pnl, peak_equity, max_drawdown, ROUND(max_drawdown / peak_equity * 100, 1) as drawdown_pct FROM portfolio"
+        },
+        "brier_by_market_type": {
+          "title": "Brier score by market type (last 30d)",
+          "sql": "SELECT market_type, COUNT(*) as trades, ROUND(AVG(brier_score_raw), 3) as avg_brier_raw, ROUND(AVG(brier_score_adjusted), 3) as avg_brier_adjusted, ROUND(AVG(brier_score_raw) - AVG(brier_score_adjusted), 3) as learning_improvement, ROUND(SUM(pnl), 2) as total_pnl FROM trade_records WHERE brier_score_adjusted IS NOT NULL AND timestamp > datetime('now', '-30 days') GROUP BY market_type"
+        },
+        "calibration_state": {
+          "title": "Calibration bucket state",
+          "sql": "SELECT bucket_range, ROUND(alpha / (alpha + beta), 3) as expected_accuracy, CAST(alpha + beta - 2 AS INTEGER) as sample_count FROM calibration_state"
+        },
+        "signal_tracker_lift": {
+          "title": "Signal tracker lift",
+          "sql": "SELECT source_tier, info_type, market_type, present_winning + present_losing as total_present, CASE WHEN (present_winning + present_losing) >= 5 AND (absent_winning + absent_losing) >= 5 THEN ROUND(CAST(present_winning AS REAL) / (present_winning + present_losing) / (CAST(absent_winning AS REAL) / (absent_winning + absent_losing)), 3) ELSE NULL END as lift FROM signal_trackers ORDER BY lift DESC"
+        },
+        "daily_api_costs": {
+          "title": "Daily API costs",
+          "sql": "SELECT date, service, calls, ROUND(cost_usd, 4) as cost FROM api_costs ORDER BY date DESC, service"
+        },
+        "counterfactual_analysis": {
+          "title": "Counterfactual: would skipped trades have been profitable?",
+          "sql": "SELECT market_type, COUNT(*) as skipped, ROUND(SUM(counterfactual_pnl), 2) as missed_pnl FROM market_type_performance WHERE total_observed > 0"
+        },
+        "model_comparison": {
+          "title": "Model comparison",
+          "sql": "SELECT run_id, model_used, total_trades, ROUND(total_pnl, 2) as pnl, ROUND(avg_brier, 3) as brier FROM experiment_runs ORDER BY started_at DESC"
+        },
+        "headline_only_analysis": {
+          "title": "Headline-only signal analysis",
+          "sql": "SELECT headline_only_signal, COUNT(*) as trades, ROUND(AVG(brier_score_adjusted), 3) as avg_brier, ROUND(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as win_pct FROM trade_records WHERE brier_score_adjusted IS NOT NULL GROUP BY headline_only_signal"
+        }
+      }
+    }
+  }
+}

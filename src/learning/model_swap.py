@@ -25,8 +25,8 @@ async def handle_model_swap(
     db: Database,
 ) -> None:
     """Execute model swap protocol.
-    1. Save ModelSwapEvent
-    2. Start new experiment
+    1. Start new experiment
+    2. Save ModelSwapEvent (FK on experiment_run_started must exist first)
     3. RESET calibration to priors
     4. DAMPEN market-type (keep last 15 Brier scores)
     5. PRESERVE signal trackers (no action)
@@ -34,7 +34,16 @@ async def handle_model_swap(
     now = datetime.now(timezone.utc)
     run_id = f"exp_{new_model}_{now.strftime('%Y%m%d_%H%M%S')}"
 
-    # 1. Save event
+    # 1. Start new experiment (must exist before model_swaps FK reference)
+    await start_experiment(
+        run_id=run_id,
+        description=f"Model swap: {old_model} -> {new_model}. Reason: {reason}",
+        config={"old_model": old_model, "new_model": new_model},
+        model=new_model,
+        db=db,
+    )
+
+    # 2. Save event (experiment_run_started FK now satisfied)
     event = ModelSwapEvent(
         timestamp=now,
         old_model=old_model,
@@ -43,15 +52,6 @@ async def handle_model_swap(
         experiment_run_started=run_id,
     )
     await db.save_model_swap(event)
-
-    # 2. Start new experiment
-    await start_experiment(
-        run_id=run_id,
-        description=f"Model swap: {old_model} -> {new_model}. Reason: {reason}",
-        config={"old_model": old_model, "new_model": new_model},
-        model=new_model,
-        db=db,
-    )
 
     # 3. RESET calibration
     calibration_mgr.reset_to_priors()
