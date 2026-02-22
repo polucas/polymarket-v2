@@ -983,9 +983,9 @@ src/alerts.py
 CLI tool using `argparse` or `click`:
 
 ```bash
-python -m src.manage model_swap --old-model "grok-4.1-fast" --new-model "grok-5-fast" --reason "..."
+python -m src.manage model_swap --old-model "grok-4-1-fast-reasoning" --new-model "grok-5-fast" --reason "..."
 python -m src.manage void_trade --trade-id "uuid" --reason "..."
-python -m src.manage start_experiment --description "..." --model "grok-4.1-fast"
+python -m src.manage start_experiment --description "..." --model "grok-4-1-fast-reasoning"
 python -m src.manage end_experiment --run-id "..."
 python -m src.manage recalculate_learning
 ```

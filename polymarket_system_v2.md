@@ -85,7 +85,7 @@ Everything you need before writing a single line of code.
 | Account | URL | What For | Cost | Setup Notes |
 |---------|-----|----------|------|-------------|
 | **Polymarket** | https://polymarket.com | Trading (paper then live) | Free to create; funded via USDC on Polygon | Need wallet (MetaMask/Rabby). KYC may be required for withdrawals. |
-| **xAI (Grok API)** | https://console.x.ai | LLM for probability estimation | Pay-as-you-go (~$6.42/mo) | API key needed. Model: `grok-4.1-fast`. |
+| **xAI (Grok API)** | https://console.x.ai | LLM for probability estimation | Pay-as-you-go (~$6.42/mo) | API key needed. Model: `grok-4-1-fast-reasoning`. |
 | **TwitterAPI.io** | https://twitterapi.io | Social signal ingestion | Pay-as-you-go (~$15.30/mo) | API key needed. Unofficial Twitter API proxy. |
 | **Hetzner Cloud** | https://console.hetzner.cloud | VPS hosting (24/7 operation) | €4.35/mo (CX22) | EU datacenter. See Section 2 for setup. |
 | **GitHub** | https://github.com | Code repository + CI | Free | Private repo recommended. |
@@ -765,9 +765,9 @@ Three layers, each operating on different timescales.
 @dataclass
 class TradeRecord:
     record_id: str                    # UUID
-    experiment_run: str               # e.g. "grok-4.1-fast_20260220"
+    experiment_run: str               # e.g. "grok-4-1-fast-reasoning_20260220"
     timestamp: datetime
-    model_used: str                   # "grok-4.1-fast"
+    model_used: str                   # "grok-4-1-fast-reasoning"
     
     market_id: str
     market_question: str
@@ -1068,7 +1068,7 @@ Optional parallel test: for 20-30 markets, send identical context to both old an
 
 ```bash
 python manage.py model_swap \
-  --old-model "grok-4.1-fast" \
+  --old-model "grok-4-1-fast-reasoning" \
   --new-model "grok-5-fast" \
   --reason "Grok 5 released, 30% reasoning improvement claimed, 2 weeks stable"
 ```

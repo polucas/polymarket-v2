@@ -84,7 +84,7 @@ def sample_trade_record():
             "record_id": str(uuid.uuid4()),
             "experiment_run": "test-run-001",
             "timestamp": datetime.utcnow(),
-            "model_used": "grok-4.1-fast",
+            "model_used": "grok-4-1-fast-reasoning",
             "market_id": "market-001",
             "market_question": "Will X happen?",
             "market_type": "political",

@@ -21,9 +21,9 @@ pytest tests/test_config.py           # Single file
 pytest -k "calibration"               # By keyword
 
 # CLI management
-python -m src.manage model_swap --old-model "grok-4.1-fast" --new-model "..." --reason "..."
+python -m src.manage model_swap --old-model "grok-4-1-fast-reasoning" --new-model "..." --reason "..."
 python -m src.manage void_trade --trade-id "<uuid>" --reason "..."
-python -m src.manage start_experiment --description "..." --model "grok-4.1-fast"
+python -m src.manage start_experiment --description "..." --model "grok-4-1-fast-reasoning"
 python -m src.manage end_experiment --run-id "<uuid>"
 python -m src.manage recalculate_learning
 ```

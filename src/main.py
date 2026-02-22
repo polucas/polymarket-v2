@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
             run_id=run_id,
             description="Auto-created on startup",
             config=settings.safe_config(),
-            model="grok-4.1-fast",
+            model="grok-4-1-fast-reasoning",
             db=db,
         )
         log.info("experiment_created", run_id=run_id)
