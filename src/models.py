@@ -60,6 +60,8 @@ class Market:
     keywords: List[str] = field(default_factory=list)
     resolved: bool = False
     resolution: Optional[str] = None  # "YES" or "NO" when resolved
+    clob_token_id_yes: str = ""  # CLOB token ID for YES outcome
+    clob_token_id_no: str = ""   # CLOB token ID for NO outcome
 
 
 @dataclass

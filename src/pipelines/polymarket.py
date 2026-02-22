@@ -1,3 +1,4 @@
+import json
 import httpx
 import structlog
 from typing import List, Optional
@@ -33,7 +34,7 @@ class PolymarketClient:
                 return mtype
         return "political"  # default
 
-    async def get_active_markets(self, tier: int) -> List[Market]:
+    async def get_active_markets(self, tier: int, tier1_fee_rate: float = 0.0, tier2_fee_rate: float = 0.04) -> List[Market]:
         """Get active markets filtered by tier criteria.
         Tier 1: resolution 15m-7d, liquidity > $5K
         Tier 2: crypto markets, 15-min resolution
@@ -56,13 +57,15 @@ class PolymarketClient:
 
         markets = []
         now = datetime.now(timezone.utc)
+        total_parsed = 0
+        filtered_resolution = 0
+        filtered_liquidity = 0
         for m in raw_markets:
             try:
                 # Parse prices
                 outcomes = m.get("outcomes", [])
                 outcomePrices = m.get("outcomePrices", "")
                 if isinstance(outcomePrices, str) and outcomePrices:
-                    import json
                     prices = json.loads(outcomePrices)
                 elif isinstance(outcomePrices, list):
                     prices = outcomePrices
@@ -100,6 +103,15 @@ class PolymarketClient:
                     if res_prices:
                         resolution = "YES" if float(res_prices.get("0", 0)) > 0.5 else "NO"
 
+                # Extract CLOB token IDs
+                clob_token_ids_raw = m.get("clobTokenIds", "[]")
+                if isinstance(clob_token_ids_raw, str):
+                    clob_tokens = json.loads(clob_token_ids_raw)
+                else:
+                    clob_tokens = clob_token_ids_raw or []
+                clob_token_id_yes = str(clob_tokens[0]) if len(clob_tokens) > 0 else ""
+                clob_token_id_no = str(clob_tokens[1]) if len(clob_tokens) > 1 else ""
+
                 market = Market(
                     market_id=str(m.get("id", m.get("condition_id", ""))),
                     question=question,
@@ -110,17 +122,23 @@ class PolymarketClient:
                     volume_24h=volume_24h,
                     liquidity=liquidity,
                     market_type=market_type,
-                    fee_rate=0.02 if tier == 1 else 0.04,
+                    fee_rate=tier1_fee_rate if tier == 1 else tier2_fee_rate,
                     keywords=keywords[:10],
                     resolved=resolved,
                     resolution=resolution,
+                    clob_token_id_yes=clob_token_id_yes,
+                    clob_token_id_no=clob_token_id_no,
                 )
+
+                total_parsed += 1
 
                 # Apply tier filters
                 if tier == 1:
                     if hours_to_resolution < 0.25 or hours_to_resolution > 168:
+                        filtered_resolution += 1
                         continue
                     if liquidity < 5000:
+                        filtered_liquidity += 1
                         continue
                 elif tier == 2:
                     if market_type != "crypto_15m":
@@ -131,15 +149,24 @@ class PolymarketClient:
                 log.warning("market_parse_error", error=str(e), market_id=m.get("id"))
                 continue
 
+        log.info("market_filter_results",
+                 tier=tier,
+                 total_from_api=total_parsed,
+                 passed=len(markets),
+                 filtered_resolution=filtered_resolution,
+                 filtered_liquidity=filtered_liquidity)
         return markets
 
-    async def get_orderbook(self, market_id: str) -> OrderBook:
+    async def get_orderbook(self, token_id: str, market_id: str = "") -> OrderBook:
         """Get top 5 bid/ask levels."""
+        if not token_id:
+            log.warning("orderbook_no_token_id", market_id=market_id)
+            return OrderBook(market_id=market_id)
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.get(
                     f"{CLOB_API_BASE}/book",
-                    params={"token_id": market_id},
+                    params={"token_id": token_id},
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -161,7 +188,6 @@ class PolymarketClient:
                 outcomes = m.get("outcomes", [])
                 outcomePrices = m.get("outcomePrices", "")
                 if isinstance(outcomePrices, str) and outcomePrices:
-                    import json
                     prices = json.loads(outcomePrices)
                 elif isinstance(outcomePrices, list):
                     prices = outcomePrices

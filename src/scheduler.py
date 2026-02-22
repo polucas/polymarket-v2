@@ -196,7 +196,11 @@ class Scheduler:
             experiment_run = experiment.run_id if experiment else "default"
 
             # Get active markets
-            markets = await self._polymarket.get_active_markets(tier=1)
+            markets = await self._polymarket.get_active_markets(
+                tier=1,
+                tier1_fee_rate=self._settings.TIER1_FEE_RATE,
+                tier2_fee_rate=self._settings.TIER2_FEE_RATE,
+            )
             if not markets:
                 log.info("no_tier1_markets")
                 self.last_scan_completed = datetime.now(timezone.utc)
@@ -294,7 +298,11 @@ class Scheduler:
             experiment = await get_current_experiment(self._db)
             experiment_run = experiment.run_id if experiment else "default"
 
-            markets = await self._polymarket.get_active_markets(tier=2)
+            markets = await self._polymarket.get_active_markets(
+                tier=2,
+                tier1_fee_rate=self._settings.TIER1_FEE_RATE,
+                tier2_fee_rate=self._settings.TIER2_FEE_RATE,
+            )
             if not markets:
                 log.info("no_tier2_markets")
                 return
@@ -418,7 +426,7 @@ class Scheduler:
             return
 
         # Get orderbook
-        orderbook = await self._polymarket.get_orderbook(market.market_id)
+        orderbook = await self._polymarket.get_orderbook(market.clob_token_id_yes, market.market_id)
 
         # Build context and call Grok
         context = build_grok_context(market, twitter_signals, relevant_rss, orderbook)

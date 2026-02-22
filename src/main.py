@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -39,30 +40,45 @@ _LOG_LEVELS = {
     "CRITICAL": logging.CRITICAL,
 }
 
+# Structlog → stdlib logging bridge
+_shared_processors = [
+    structlog.contextvars.merge_contextvars,
+    structlog.processors.add_log_level,
+    structlog.processors.TimeStamper(fmt="iso"),
+    structlog.processors.StackInfoRenderer(),
+    structlog.processors.format_exc_info,
+    structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+]
+
 structlog.configure(
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.processors.JSONRenderer(),
-    ],
-    wrapper_class=structlog.make_filtering_bound_logger(
-        _LOG_LEVELS.get(get_settings().LOG_LEVEL.upper(), logging.INFO)
-    ),
+    processors=_shared_processors,
+    wrapper_class=structlog.stdlib.BoundLogger,
     context_class=dict,
-    logger_factory=structlog.PrintLoggerFactory(),
+    logger_factory=structlog.stdlib.LoggerFactory(),
     cache_logger_on_first_use=True,
 )
 
-# Also log to file for environments without systemd journal capture
+# JSON formatter for both handlers
+_formatter = structlog.stdlib.ProcessorFormatter(
+    processor=structlog.processors.JSONRenderer(),
+)
+
+# File handler
 _log_dir = os.path.dirname(get_settings().DB_PATH) or "data"
 os.makedirs(_log_dir, exist_ok=True)
 _file_handler = logging.FileHandler(os.path.join(_log_dir, "bot.log"))
-_file_handler.setFormatter(logging.Formatter("%(message)s"))
-logging.root.addHandler(_file_handler)
-logging.root.setLevel(
+_file_handler.setFormatter(_formatter)
+
+# Stdout handler
+_stream_handler = logging.StreamHandler(sys.stdout)
+_stream_handler.setFormatter(_formatter)
+
+# Configure root logger
+root_logger = logging.getLogger()
+root_logger.handlers.clear()
+root_logger.addHandler(_file_handler)
+root_logger.addHandler(_stream_handler)
+root_logger.setLevel(
     _LOG_LEVELS.get(get_settings().LOG_LEVEL.upper(), logging.INFO)
 )
 
@@ -97,7 +113,7 @@ async def lifespan(app: FastAPI):
         await start_experiment(
             run_id=run_id,
             description="Auto-created on startup",
-            config=json.loads(settings.model_dump_json()),
+            config=settings.safe_config(),
             model="grok-3-fast",
             db=db,
         )

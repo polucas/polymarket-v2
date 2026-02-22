@@ -1,6 +1,11 @@
 from dataclasses import dataclass
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_SECRET_FIELDS = frozenset({
+    "XAI_API_KEY", "TWITTER_API_KEY", "POLYMARKET_API_KEY",
+    "POLYMARKET_SECRET", "POLYMARKET_PASSPHRASE", "TELEGRAM_BOT_TOKEN",
+})
+
 
 class Settings(BaseSettings):
     # API Keys
@@ -45,6 +50,15 @@ class Settings(BaseSettings):
 
     # Initial Bankroll
     INITIAL_BANKROLL: float = 2000.0
+
+    def safe_config(self) -> dict:
+        """Return config dict with secret fields redacted for DB storage."""
+        import json as _json
+        data = _json.loads(self.model_dump_json())
+        for key in _SECRET_FIELDS:
+            if key in data:
+                data[key] = "***REDACTED***"
+        return data
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

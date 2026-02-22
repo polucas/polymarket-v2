@@ -135,7 +135,7 @@ class TestGetActiveMarketsTier1:
         assert m.yes_price == pytest.approx(0.60)
         assert m.no_price == pytest.approx(0.40)
         assert m.market_type == "political"
-        assert m.fee_rate == 0.02
+        assert m.fee_rate == 0.0
         assert m.liquidity == 20_000.0
         assert m.volume_24h == 8_000.0
         assert m.resolved is False
@@ -282,10 +282,10 @@ class TestGetOrderbook:
         mock_client_instance.__aexit__ = AsyncMock(return_value=False)
 
         with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
-            ob = await client.get_orderbook("token-xyz")
+            ob = await client.get_orderbook("token-xyz", market_id="market-abc")
 
         assert isinstance(ob, OrderBook)
-        assert ob.market_id == "token-xyz"
+        assert ob.market_id == "market-abc"
         assert ob.bids == [100.0, 200.0, 150.0]
         assert ob.asks == [80.0, 120.0]
         assert ob.timestamp is not None
