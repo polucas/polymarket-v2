@@ -65,7 +65,7 @@ async def execute_trade(
     polymarket_client,
     environment: str,
     experiment_run: str = "",
-    model_used: str = "grok-3-fast",
+    model_used: str = "grok-4.1-fast",
 ) -> Optional[TradeRecord]:
     """Execute a trade (paper or live) and create trade record.
 

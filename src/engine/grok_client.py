@@ -71,7 +71,7 @@ class GrokClient:
     def __init__(self, settings: Settings, db: Database):
         self._api_key = settings.XAI_API_KEY
         self._db = db
-        self._model = "grok-3-fast"
+        self._model = "grok-4.1-fast"
         self._timeout = httpx.Timeout(30.0, connect=10.0)
 
     async def complete(self, prompt: str, max_tokens: int = 500) -> str:
