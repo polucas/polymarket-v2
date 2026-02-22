@@ -1,9 +1,22 @@
-# Polymarket Prediction System v2.3 — Complete Project Bible
+# Polymarket Prediction System v2.5 — Complete Project Bible
 
-> **Version:** 2.3 | **Last updated:** 2026-02-21
-> **Status:** Pre-implementation (design complete, paper trading not started)
-> **Bankroll:** $5,000 | **Monthly OpEx target:** <$30
-> 
+> **Version:** 2.5 | **Last updated:** 2026-02-22
+> **Status:** Paper trading active on VPS
+> **Bankroll:** $2,000 | **Monthly OpEx target:** <$30
+>
+> **v2.5 changes:**
+> - Fixed critical FK constraint blocker: `trade_records.experiment_run` references `experiment_runs(run_id)` — without a row in `experiment_runs`, all `save_trade()` calls fail silently. Lifespan now auto-creates an experiment run on startup if none exists.
+> - Fixed TIER1_FEE_RATE from 0.02 to 0.0 — Tier 1 targets fee-free markets, the 2% phantom fee was eating into edge calculations and blocking valid trades.
+> - Added skip records for all silent early returns in `_process_market()`: grok failure, position too small, market type disabled. Every market evaluation now leaves an audit trail in `trade_records` with `action=SKIP`.
+> - Added file logging (`data/bot.log`) alongside stdout — logs now persist even without systemd/journald.
+>
+> **v2.4 changes:**
+> - Reduced initial bankroll from $5,000 to $2,000 (updated cost breakeven analysis)
+> - Widened Tier 1 resolution window from 1-24h to 15min-7days (1-24h range was empty on Polymarket)
+> - Implemented full Telegram alerting with 9 alert types: trade executed, daily summary, error, observe-only, monk mode, tier 2 activation/deactivation, bot lifecycle (startup/shutdown), stale scan warning
+> - Added `DAILY_SUMMARY_HOUR_UTC` config setting for daily summary cron
+> - Telegram alerting promoted from optional to implemented (Section 16.4)
+>
 > **v2.3 changes (critical review fixes):**
 > - Fixed calibration feedback loop — now uses raw probability, not adjusted (prevented self-referencing convergence)
 > - Fixed probability adjustment — shrinkage toward 0.50 instead of broken linear shift
@@ -273,9 +286,10 @@ LOG_LEVEL=INFO
 DASHBOARD_PORT=8001
 DASHBOARD_PASSWORD_HASH=   # Generate: python -c "from datasette_auth_passwords import hash_password; print(hash_password('your-password'))"
 
-# Alerts (optional)
-TELEGRAM_BOT_TOKEN=        # For trade notifications
+# Alerts
+TELEGRAM_BOT_TOKEN=        # For trade notifications (9 alert types)
 TELEGRAM_CHAT_ID=
+DAILY_SUMMARY_HOUR_UTC=0   # Hour (0-23 UTC) for daily summary alert
 EOF
 
 chmod 600 ~/polymarket-bot/.env
@@ -440,7 +454,7 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 │ CLOB WS: orderbook  │      │  - RSS feeds (free)      │
 │                     │      │  - Twitter search (paid)  │
 │ Filters:            │      │                          │
-│  - Resolution 1-24h │      │ If breaking news found → │
+│  - Resolution 15m-7d │      │ If breaking news found → │
 │  - Liquidity > $5K  │      │   activate Tier 2 scan   │
 │  - Fee-free markets │      │   for 30 min window      │
 └──────────┬──────────┘      └────────────┬────────────┘
@@ -536,7 +550,7 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 |-----------|-------|-----------|
 | Scan frequency | Every 15 min | Mispricings persist minutes-hours on event markets |
 | Market types | Political, regulatory, economic, cultural, sports | Fee-free on Polymarket |
-| Resolution window | 1-24 hours | Sub-1h markets reprice before 15-min scan detects them (see 5.3) |
+| Resolution window | 15 min - 7 days | Polymarket event markets mostly resolve in 1-7 day range; floor at 15 min captures fast-moving markets (see 5.3) |
 | Fee rate | 0% (fee-free markets) | No taker fees on non-crypto, non-sports markets |
 | Min edge threshold | 4% (high confidence) / 7% (moderate) | Minimum quality bar — ranking handles prioritization above this |
 | Min confidence | 65% (adjusted) | Lower start, let Bayesian calibration correct |
@@ -559,13 +573,15 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 | Daily trade cap | 3 | Most days should be 0 |
 | Activation trigger | News Detector finds crypto-relevant breaking news | Don't run blind |
 
-### 5.3 Why 1h Minimum Resolution (Not 15 min) for Tier 1
+### 5.3 Resolution Window Rationale (15 min - 7 days)
 
-Markets resolving in 15-60 minutes on non-crypto events are almost certainly already priced correctly by the time the 15-min scan detects them. If a Fed decision is announced at 2:00 PM and a market resolves at 2:15 PM, the scan might not catch it before resolution. And if it does, the price has already moved to 0.95+ because faster participants have acted.
+The original design used a 1-24h window, but empirical analysis of Polymarket showed this range was mostly empty — event markets are either very short (<1h) or multi-day (1-7d+). The window was widened to 15 min - 7 days to capture the actual distribution of liquid, tradeable markets.
 
-The 1h minimum gives the system time to: detect news → pull signals → call Grok → calculate edge → execute. That pipeline takes 1-3 minutes. The remaining 57+ minutes is for the position to have value.
+**15-min floor:** The processing pipeline (detect news → pull signals → call Grok → calculate edge → execute) takes 1-3 minutes. Markets resolving in <15 min are too tight for reliable execution, but 15+ min gives adequate time.
 
-**Revisit condition:** If WebSocket-based real-time news detection is added (not in v1), sub-1h markets become viable. Track skipped markets with `resolution_window_too_short` to quantify missed opportunities.
+**7-day ceiling:** Markets resolving beyond 7 days are more likely to be already well-priced and harder to find news-driven edges on. The 7-day cap focuses on markets where breaking news can still create meaningful mispricings.
+
+**Note:** Track skipped markets with `resolution_window_too_short` and `resolution_window_too_long` to monitor if these bounds need further tuning.
 
 ### 5.4 Tier 2 Activation Logic
 
@@ -1009,6 +1025,10 @@ def on_trade_resolved(record: TradeRecord):
 ```
 
 ### 7.7 Experiment Runs
+
+**Critical invariant:** An experiment run must exist before any trade record can be saved. The `trade_records.experiment_run` column has a foreign key constraint to `experiment_runs(run_id)`, and `PRAGMA foreign_keys=ON` is set. Without a valid experiment run, `save_trade()` fails silently (the FK violation is caught by the scheduler's exception handler).
+
+**Auto-creation:** The FastAPI lifespan checks for an active experiment run on startup. If none exists, it auto-creates one with `run_id=run_YYYYMMDD_HHMMSS` and `description="Auto-created on startup"`. This ensures the bot can always save trade records from the first scan cycle.
 
 ```python
 @dataclass
@@ -1907,7 +1927,7 @@ CREATE TABLE daily_mode_log (
 
 ### 14.2 Cost as % of Bankroll
 
-With $5,000 bankroll: monthly OpEx = **0.53%** of bankroll. System needs **0.6% monthly return** to break even on costs. This is achievable but not trivial. In volatile crypto periods where Tier 2 activates frequently, costs could reach ~$32/month (0.64%).
+With $2,000 bankroll: monthly OpEx = **1.32%** of bankroll. System needs **~1.4% monthly return** to break even on costs. This is a higher hurdle than with a larger bankroll, making edge quality critical. In volatile crypto periods where Tier 2 activates frequently, costs could reach ~$32/month (1.6%).
 
 ### 14.3 Observe-Only Savings
 
@@ -1952,6 +1972,7 @@ polymarket-predictor-v2/
 │   └── rss_feeds.yaml           # RSS feed URLs and domains
 ├── data/
 │   ├── predictor.db             # SQLite database
+│   ├── bot.log                  # Persistent log file (structlog JSON lines)
 │   └── backups/                 # Daily DB snapshots
 ├── tests/
 │   ├── test_calibration.py
@@ -2000,7 +2021,9 @@ log.info("scan_cycle_end", tier=1, duration_sec=45, trades_executed=1, trades_sk
 - `WARNING`: Parse failures, API retries, approaching limits (budget, cap)
 - `ERROR`: API failures after all retries, unexpected exceptions
 
-Logs go to `journald` via systemd. View with: `sudo journalctl -u polymarket-bot -f --output=json-pretty`
+Logs go to both stdout and `data/bot.log` (file handler added at startup). When running under systemd, stdout also goes to `journald`. View with:
+- File: `tail -f data/bot.log`
+- Journald: `sudo journalctl -u polymarket-bot -f --output=json-pretty`
 
 ### 15.2 Health Check Endpoint
 
@@ -2145,26 +2168,28 @@ Both Datasette and the future React dashboard run on the same Hetzner VPS as the
 - Cloudflare Tunnel: `https://dashboard.yourdomain.com` (free, adds HTTPS + DDoS protection)
 - Phone-friendly: Datasette's default UI is mobile-responsive
 
-### 16.4 Alerting (Optional)
+### 16.4 Alerting (Telegram — Implemented)
 
-Telegram bot for real-time notifications:
+Telegram bot for real-time notifications. Implemented in `src/alerts.py` with 9 alert types wired into the scheduler and lifecycle hooks.
 
-```python
-async def send_alert(message: str):
-    """Send to Telegram. Use for: trades executed, daily summary, errors."""
-    if not TELEGRAM_BOT_TOKEN:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    await httpx.AsyncClient().post(url, json={
-        "chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"
-    })
+**Setup:** Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. Alerts are no-op if either is empty.
 
-# Alert triggers:
-# - Trade executed: "🟢 BUY YES on 'Will Fed cut rates?' at 0.35 | Edge: 12% | Size: $400"
-# - Daily summary: "📊 Day: 3 trades, +$47.20 PnL, Brier: 0.18"
-# - Error: "🔴 Grok API timeout — skipping scan cycle"
-# - Observe-only: "⏸️ Daily cap hit (5/5). Switching to observe-only."
-```
+**Alert types:**
+
+| Alert | Trigger | Format Function |
+|-------|---------|-----------------|
+| Trade executed | Every trade execution (BUY YES/NO) | `format_trade_alert()` |
+| Daily summary | Cron job at `DAILY_SUMMARY_HOUR_UTC` (default: 0 UTC) | `format_daily_summary()` |
+| Error | Any scan/resolve/adverse-update failure | `format_error_alert()` |
+| Observe-only | Daily trade cap hit (once per day) | `format_observe_only_alert()` |
+| Monk Mode | Any Monk Mode constraint triggered | `format_monk_mode_alert()` |
+| Tier 2 activated | Crypto news triggers Tier 2 scan | `format_tier2_alert(active=True)` |
+| Tier 2 deactivated | No crypto signals for 30 min | `format_tier2_alert(active=False)` |
+| Bot started | Application startup | `format_lifecycle_alert("STARTED", env)` |
+| Bot stopping | Application shutdown | `format_lifecycle_alert("STOPPING", env)` |
+| Stale scan warning | No scan completed in >30 min | `format_stale_scan_alert()` |
+
+**Configuration:** `DAILY_SUMMARY_HOUR_UTC` (default: 0) controls when the daily summary is sent. Set in `.env` or config.
 
 ---
 
@@ -2206,7 +2231,7 @@ async def send_alert(message: str):
 29. API cost tracking + parse failure rate monitoring
 30. Model swap CLI + protocol
 31. Datasette dashboard setup + saved queries (with dual Brier views)
-32. Telegram alerting (optional)
+32. Telegram alerting (9 alert types — implemented)
 
 ### Phase 4: Paper Trading (Week 7-12)
 33. Run minimum 200 trades across both tiers
@@ -2219,7 +2244,7 @@ async def send_alert(message: str):
 40. Monthly: update `known_sources.yaml`, check S4 threshold
 
 ### Phase 5: Go Live (Week 13+)
-41. If adjusted Brier < 0.25 AND positive paper PnL → switch to live with 20% of bankroll ($1,000)
+41. If adjusted Brier < 0.25 AND positive paper PnL → switch to live with 20% of bankroll ($400)
 42. Fund Polygon wallet with USDC
 43. Change `ENVIRONMENT=live` in .env, restart bot
 44. Monitor first 20 live trades closely — watch for slippage discrepancy vs paper
@@ -2236,7 +2261,7 @@ async def send_alert(message: str):
 □ Check Telegram for overnight alerts (if enabled)
 □ Open Datasette → run "Today's trades" query
 □ Check portfolio equity vs yesterday
-□ Verify bot is running: sudo systemctl status polymarket-bot
+□ Verify bot is running: sudo systemctl status polymarket-bot (or check data/bot.log)
 □ Check API costs: run "Daily API costs" query
 ```
 
@@ -2284,7 +2309,7 @@ async def send_alert(message: str):
 6. □ Wallet funded with USDC on Polygon
 7. □ POLYMARKET_API_KEY, SECRET, PASSPHRASE set in .env
 8. □ Change ENVIRONMENT=live in .env
-9. □ Start with 20% of bankroll ($1,000)
+9. □ Start with 20% of bankroll ($400)
 10. □ Restart bot: sudo systemctl restart polymarket-bot
 11. □ Verify first live trade executes correctly
 12. □ Set Telegram alerts to high priority for first week

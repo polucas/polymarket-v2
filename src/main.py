@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -23,6 +24,7 @@ from src.learning.signal_tracker import SignalTrackerManager
 from src.pipelines.polymarket import PolymarketClient
 from src.pipelines.rss import RSSPipeline
 from src.pipelines.twitter import TwitterDataPipeline
+from src.learning.experiments import get_current_experiment, start_experiment
 from src.scheduler import Scheduler
 
 # ---------------------------------------------------------------------------
@@ -54,6 +56,16 @@ structlog.configure(
     cache_logger_on_first_use=True,
 )
 
+# Also log to file for environments without systemd journal capture
+_log_dir = os.path.dirname(get_settings().DB_PATH) or "data"
+os.makedirs(_log_dir, exist_ok=True)
+_file_handler = logging.FileHandler(os.path.join(_log_dir, "bot.log"))
+_file_handler.setFormatter(logging.Formatter("%(message)s"))
+logging.root.addHandler(_file_handler)
+logging.root.setLevel(
+    _LOG_LEVELS.get(get_settings().LOG_LEVEL.upper(), logging.INFO)
+)
+
 log = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
@@ -77,6 +89,21 @@ async def lifespan(app: FastAPI):
     # Database
     db = await Database.init(settings.DB_PATH)
     await run_migrations(db)
+
+    # Ensure an active experiment run exists
+    experiment = await get_current_experiment(db)
+    if experiment is None:
+        run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        await start_experiment(
+            run_id=run_id,
+            description="Auto-created on startup",
+            config=json.loads(settings.model_dump_json()),
+            model="grok-3-fast",
+            db=db,
+        )
+        log.info("experiment_created", run_id=run_id)
+    else:
+        log.info("experiment_exists", run_id=experiment.run_id)
 
     # Learning managers
     calibration_mgr = CalibrationManager()

@@ -389,6 +389,8 @@ class Scheduler:
         # Check if market type disabled by learning
         if self._market_type_mgr.should_disable(market.market_type):
             log.info("market_type_disabled", market_type=market.market_type)
+            skip_record = self._build_skip_record(market, "market_type_disabled", experiment_run, tier)
+            await self._db.save_trade(skip_record)
             return
 
         # Extract keywords
@@ -423,6 +425,8 @@ class Scheduler:
         grok_result = await self._grok.call_grok_with_retry(context, market.market_id)
 
         if grok_result is None:
+            skip_record = self._build_skip_record(market, "grok_failed", experiment_run, tier)
+            await self._db.save_trade(skip_record)
             return
 
         grok_prob = grok_result["estimated_probability"]
@@ -463,6 +467,13 @@ class Scheduler:
         )
 
         if position_size < 1.0:
+            skip_record = self._build_skip_record(
+                market, f"position_too_small_{position_size:.2f}", experiment_run, tier,
+                grok_prob=grok_prob, grok_conf=grok_conf,
+                adj_prob=adj_prob, adj_conf=adj_conf,
+                reasoning=reasoning, signal_types=signal_types,
+            )
+            await self._db.save_trade(skip_record)
             return
 
         # Detect headline-only

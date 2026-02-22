@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     TIER1_SCAN_INTERVAL_MINUTES: int = 15
     TIER1_MIN_EDGE: float = 0.04
     TIER1_DAILY_CAP: int = 5
-    TIER1_FEE_RATE: float = 0.02
+    TIER1_FEE_RATE: float = 0.0
 
     # Tier 2 Config
     TIER2_SCAN_INTERVAL_MINUTES: int = 3
