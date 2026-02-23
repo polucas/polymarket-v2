@@ -88,8 +88,8 @@ class Settings(BaseSettings):
     # Tier 1 Config
     TIER1_SCAN_INTERVAL_MINUTES: int = 15
     TIER1_MIN_EDGE: float = 0.04
-    TIER1_DAILY_CAP: int = 5
-    TIER1_FEE_RATE: float = 0.02
+    TIER1_DAILY_CAP: int = 15
+    TIER1_FEE_RATE: float = 0.0
 
     # Tier 2 Config
     TIER2_SCAN_INTERVAL_MINUTES: int = 3
@@ -103,13 +103,13 @@ class Settings(BaseSettings):
     CONSECUTIVE_LOSS_COOLDOWN: int = 3
     COOLDOWN_DURATION_HOURS: float = 2.0
     DAILY_API_BUDGET_USD: float = 8.0
-    MAX_POSITION_PCT: float = 0.08
+    MAX_POSITION_PCT: float = 0.01844
     MAX_TOTAL_EXPOSURE_PCT: float = 0.30
     KELLY_FRACTION: float = 0.25
     MAX_CLUSTER_EXPOSURE_PCT: float = 0.12
 
     # Initial Bankroll
-    INITIAL_BANKROLL: float = 5000.0
+    INITIAL_BANKROLL: float = 10000.0
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 ```
@@ -584,7 +584,7 @@ src/engine/trade_decision.py
 - **`calculate_edge(adjusted_prob, market_price, fee_rate) -> float`:**
   - `abs(adjusted_prob - market_price) - fee_rate`
 
-- **`kelly_size(adjusted_prob, market_price, side, bankroll, kelly_fraction=0.25, max_position_pct=0.08) -> float` (lines 1337-1375):**
+- **`kelly_size(adjusted_prob, market_price, side, bankroll, kelly_fraction=0.25, max_position_pct=0.01844) -> float` (lines 1337-1375):**
   - BUY_YES: `f* = (prob - price) / (1 - price)`, return 0 if prob <= price
   - BUY_NO: `f* = (price - prob) / price`, return 0 if prob >= price
   - Apply quarter Kelly, cap at max_position_pct * bankroll
@@ -613,7 +613,7 @@ def detect_market_clusters(candidates: List[TradeCandidate]) -> Dict[str, str]: 
 def calculate_edge(adjusted_prob: float, market_price: float, fee_rate: float) -> float: ...
 def kelly_size(adjusted_prob: float, market_price: float, side: str,
                bankroll: float, kelly_fraction: float = 0.25,
-               max_position_pct: float = 0.08) -> float: ...
+               max_position_pct: float = 0.01844) -> float: ...
 def determine_side(adjusted_prob: float, market_price: float) -> str: ...
 def check_monk_mode(config: MonkModeConfig, trade_signal, portfolio: Portfolio,
                     today_trades: List[TradeRecord], week_trades: List[TradeRecord],

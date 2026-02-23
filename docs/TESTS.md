@@ -89,6 +89,7 @@ def sample_trade_record():
             "market_question": "Will X happen?",
             "market_type": "political",
             "resolution_window_hours": 12.0,
+            "resolution_datetime": None,  # Exact market resolution time (populated from Gamma API endDate)
             "tier": 1,
             "grok_raw_probability": 0.75,
             "grok_raw_confidence": 0.80,
@@ -685,8 +686,8 @@ determine_side():
 
 kelly_size() BUY_YES:
 26. prob=0.80, price=0.60, bankroll=5000:
-    f* = (0.80-0.60)/(1-0.60) = 0.50, quarter=0.125, size=$625, cap=8%*5000=$400
-    -> returns $400 (capped)
+    f* = (0.80-0.60)/(1-0.60) = 0.50, quarter=0.125, size=$625, cap=1.844%*5000=$92.20
+    -> returns $92.20 (capped)
 27. prob=0.65, price=0.60, bankroll=5000:
     f* = (0.65-0.60)/(1-0.60) = 0.125, quarter=0.03125, size=$156.25
     -> returns $156.25 (under cap)
@@ -694,8 +695,8 @@ kelly_size() BUY_YES:
 
 kelly_size() BUY_NO:
 29. prob=0.30, price=0.60, bankroll=5000:
-    f* = (0.60-0.30)/0.60 = 0.50, quarter=0.125, size=$625, cap=$400
-    -> returns $400 (capped)
+    f* = (0.60-0.30)/0.60 = 0.50, quarter=0.125, size=$625, cap=$92.20
+    -> returns $92.20 (capped)
 30. prob=0.55, price=0.60, bankroll=5000:
     f* = (0.60-0.55)/0.60 = 0.0833, quarter=0.0208, size=$104.17
     -> returns $104.17
@@ -706,8 +707,8 @@ kelly_size() edge cases:
 33. max_position_pct=0.0 -> returns 0.0
 
 check_monk_mode():
-34. Tier 1 with 5 executed trades today -> False, "tier1_daily_cap_reached"
-35. Tier 1 with 4 executed trades -> passes this check
+34. Tier 1 with 15 executed trades today -> False, "tier1_daily_cap_reached"
+35. Tier 1 with 14 executed trades -> passes this check
 36. Tier 2 with 3 executed trades -> False, "tier2_daily_cap_reached"
 37. Today PnL = -$260 with equity $5000 (5.2% loss) -> False, "daily_loss_limit"
 38. Today PnL = -$240 (4.8% loss) -> passes this check
@@ -721,8 +722,8 @@ check_monk_mode():
 46. All checks pass -> True, None
 
 get_scan_mode():
-47. 5+ tier1 executed trades -> "observe_only"
-48. 4 tier1 executed + 2 tier1 skipped -> "active" (skips don't count)
+47. 15+ tier1 executed trades -> "observe_only"
+48. 14 tier1 executed + 2 tier1 skipped -> "active" (skips don't count)
 49. 0 tier1 trades -> "active"
 ```
 

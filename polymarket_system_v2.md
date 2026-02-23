@@ -1,8 +1,8 @@
 # Polymarket Prediction System v2.5 — Complete Project Bible
 
-> **Version:** 2.5 | **Last updated:** 2026-02-22
+> **Version:** 2.5 | **Last updated:** 2026-02-23
 > **Status:** Paper trading active on VPS
-> **Bankroll:** $2,000 | **Monthly OpEx target:** <$30
+> **Bankroll:** $10,000 | **Monthly OpEx target:** <$30
 >
 > **v2.5 changes:**
 > - Fixed critical FK constraint blocker: `trade_records.experiment_run` references `experiment_runs(run_id)` — without a row in `experiment_runs`, all `save_trade()` calls fail silently. Lifespan now auto-creates an experiment run on startup if none exists.
@@ -11,7 +11,7 @@
 > - Added file logging (`data/bot.log`) alongside stdout — logs now persist even without systemd/journald.
 >
 > **v2.4 changes:**
-> - Reduced initial bankroll from $5,000 to $2,000 (updated cost breakeven analysis)
+> - Reduced initial bankroll from $5,000 to $2,000 (updated cost breakeven analysis); later increased to $10,000 in v2.5
 > - Widened Tier 1 resolution window from 1-24h to 15min-7days (1-24h range was empty on Polymarket)
 > - Implemented full Telegram alerting with 9 alert types: trade executed, daily summary, error, observe-only, monk mode, tier 2 activation/deactivation, bot lifecycle (startup/shutdown), stale scan warning
 > - Added `DAILY_SUMMARY_HOUR_UTC` config setting for daily summary cron
@@ -555,8 +555,8 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 | Min edge threshold | 4% (high confidence) / 7% (moderate) | Minimum quality bar — ranking handles prioritization above this |
 | Min confidence | 65% (adjusted) | Lower start, let Bayesian calibration correct |
 | Execution | Taker orders | Speed > rebate for news-driven moves |
-| Max position | 8% of bankroll | Conservative for event uncertainty |
-| Daily trade cap | 5 | Quality over quantity — enforced via ranking, not first-come |
+| Max position | 1.844% of bankroll | ~$160 max bet at $10k bankroll — conservative for event uncertainty |
+| Daily trade cap | 15 | Higher throughput with ranking keeping quality bar |
 
 ### 5.2 Tier 2: Crypto Opportunist (Secondary — 20% of capital)
 
@@ -773,6 +773,7 @@ class TradeRecord:
     market_question: str
     market_type: str                  # "political", "crypto_15m", "economic", etc.
     resolution_window_hours: float
+    resolution_datetime: Optional[datetime]  # Exact market resolution time from Gamma API endDate
     tier: int                         # 1 or 2
     
     grok_raw_probability: float
@@ -1132,7 +1133,7 @@ class MonkModeConfig:
     consecutive_loss_cooldown: int = 3   # 3 losses → 2h pause
     cooldown_duration_hours: float = 2.0
     daily_api_budget_usd: float = 8.0
-    max_position_pct: float = 0.08       # 8% per trade
+    max_position_pct: float = 0.01844    # ~1.8% per trade (~$160 at $10k bankroll)
     max_total_exposure_pct: float = 0.30 # 30% total
     kelly_fraction: float = 0.25         # Quarter Kelly
 ```
@@ -1267,7 +1268,7 @@ def select_best_trades(
 
 ### 10.2 Correlated Market Detection
 
-Polymarket frequently lists multiple markets about the same underlying event: "Will the Fed cut rates?", "Will the Fed cut by 50bps?", "Will the Fed hold rates?" — all resolve on the same announcement. Without correlation detection, the system could take 8% positions on all three, concentrating 24% of bankroll on a single event.
+Polymarket frequently lists multiple markets about the same underlying event: "Will the Fed cut rates?", "Will the Fed cut by 50bps?", "Will the Fed hold rates?" — all resolve on the same announcement. Without correlation detection, the system could take ~1.8% positions on all three, concentrating ~5.5% of bankroll on a single event.
 
 ```python
 from collections import defaultdict
@@ -1355,8 +1356,8 @@ def calculate_edge(adjusted_prob: float, market_price: float, fee_rate: float) -
 
 ```python
 def kelly_size(adjusted_prob: float, market_price: float, side: str,
-               bankroll: float, kelly_fraction: float = 0.25, 
-               max_position_pct: float = 0.08) -> float:
+               bankroll: float, kelly_fraction: float = 0.25,
+               max_position_pct: float = 0.01844) -> float:
     """
     Correct Kelly for binary prediction markets.
     
@@ -1373,7 +1374,7 @@ def kelly_size(adjusted_prob: float, market_price: float, side: str,
         Naive:   f* = 0.05 (5%)
         Correct: f* = (0.95 - 0.90) / (1 - 0.90) = 0.50 (50%)
       The market pays 10:1 on a 5% edge — Kelly wants heavy exposure.
-      Quarter Kelly + 8% cap still limits actual position to 8%, but the
+      Quarter Kelly + ~1.8% cap still limits actual position to ~$160, but the
       RANKING of trades changes: high-price YES bets rank much higher.
     """
     if side == "BUY_YES":
@@ -1803,8 +1804,9 @@ CREATE TABLE trade_records (
     market_question TEXT NOT NULL,
     market_type TEXT NOT NULL,
     resolution_window_hours REAL,
+    resolution_datetime TEXT,     -- Exact market resolution time (ISO 8601)
     tier INTEGER NOT NULL,
-    
+
     grok_raw_probability REAL NOT NULL,
     grok_raw_confidence REAL NOT NULL,
     grok_reasoning TEXT,
@@ -1927,7 +1929,7 @@ CREATE TABLE daily_mode_log (
 
 ### 14.2 Cost as % of Bankroll
 
-With $2,000 bankroll: monthly OpEx = **1.32%** of bankroll. System needs **~1.4% monthly return** to break even on costs. This is a higher hurdle than with a larger bankroll, making edge quality critical. In volatile crypto periods where Tier 2 activates frequently, costs could reach ~$32/month (1.6%).
+With $10,000 bankroll: monthly OpEx = **0.26%** of bankroll. System needs **~0.3% monthly return** to break even on costs. Larger bankroll significantly lowers the cost hurdle. In volatile crypto periods where Tier 2 activates frequently, costs could reach ~$32/month (0.32%).
 
 ### 14.3 Observe-Only Savings
 
@@ -2244,7 +2246,7 @@ Telegram bot for real-time notifications. Implemented in `src/alerts.py` with 9 
 40. Monthly: update `known_sources.yaml`, check S4 threshold
 
 ### Phase 5: Go Live (Week 13+)
-41. If adjusted Brier < 0.25 AND positive paper PnL → switch to live with 20% of bankroll ($400)
+41. If adjusted Brier < 0.25 AND positive paper PnL → switch to live with 20% of bankroll ($2,000)
 42. Fund Polygon wallet with USDC
 43. Change `ENVIRONMENT=live` in .env, restart bot
 44. Monitor first 20 live trades closely — watch for slippage discrepancy vs paper
@@ -2309,7 +2311,7 @@ Telegram bot for real-time notifications. Implemented in `src/alerts.py` with 9 
 6. □ Wallet funded with USDC on Polygon
 7. □ POLYMARKET_API_KEY, SECRET, PASSPHRASE set in .env
 8. □ Change ENVIRONMENT=live in .env
-9. □ Start with 20% of bankroll ($400)
+9. □ Start with 20% of bankroll ($2,000)
 10. □ Restart bot: sudo systemctl restart polymarket-bot
 11. □ Verify first live trade executes correctly
 12. □ Set Telegram alerts to high priority for first week
