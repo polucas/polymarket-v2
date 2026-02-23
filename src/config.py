@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # Tier 1 Config
     TIER1_SCAN_INTERVAL_MINUTES: int = 15
     TIER1_MIN_EDGE: float = 0.04
-    TIER1_DAILY_CAP: int = 5
+    TIER1_DAILY_CAP: int = 15
     TIER1_FEE_RATE: float = 0.0
 
     # Tier 2 Config
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     CONSECUTIVE_LOSS_COOLDOWN: int = 3
     COOLDOWN_DURATION_HOURS: float = 2.0
     DAILY_API_BUDGET_USD: float = 8.0
-    MAX_POSITION_PCT: float = 0.08
+    MAX_POSITION_PCT: float = 0.01844
     MAX_TOTAL_EXPOSURE_PCT: float = 0.30
     KELLY_FRACTION: float = 0.25
     MAX_CLUSTER_EXPOSURE_PCT: float = 0.12
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     DAILY_SUMMARY_HOUR_UTC: int = 0  # Hour of day (UTC) to send daily summary
 
     # Initial Bankroll
-    INITIAL_BANKROLL: float = 2000.0
+    INITIAL_BANKROLL: float = 10000.0
 
     def safe_config(self) -> dict:
         """Return config dict with secret fields redacted for DB storage."""

@@ -166,6 +166,7 @@ class TradeRecord:
     brier_score_raw: Optional[float] = None
     brier_score_adjusted: Optional[float] = None
     resolved_at: Optional[datetime] = None
+    resolution_datetime: Optional[datetime] = None
     unrealized_adverse_move: Optional[float] = None
 
     voided: bool = False

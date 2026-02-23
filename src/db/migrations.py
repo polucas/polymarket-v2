@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import aiosqlite
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATIONS: dict[int, list[str]] = {
     1: [
@@ -155,6 +155,9 @@ MIGRATIONS: dict[int, list[str]] = {
             timestamp TEXT NOT NULL DEFAULT (datetime('now')),
             date TEXT NOT NULL DEFAULT (date('now'))
         )""",
+    ],
+    2: [
+        "ALTER TABLE trade_records ADD COLUMN resolution_datetime TEXT",
     ],
 }
 

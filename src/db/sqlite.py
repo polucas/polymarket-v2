@@ -59,7 +59,7 @@ class Database:
         await self._conn.execute(
             """INSERT INTO trade_records (
                 record_id, experiment_run, timestamp, model_used,
-                market_id, market_question, market_type, resolution_window_hours, tier,
+                market_id, market_question, market_type, resolution_window_hours, resolution_datetime, tier,
                 grok_raw_probability, grok_raw_confidence, grok_reasoning, grok_signal_types,
                 headline_only_signal,
                 calibration_adjustment, market_type_adjustment, signal_weight_adjustment,
@@ -68,10 +68,11 @@ class Database:
                 action, skip_reason, position_size_usd, kelly_fraction_used, market_cluster_id,
                 actual_outcome, pnl, brier_score_raw, brier_score_adjusted, resolved_at,
                 unrealized_adverse_move, voided, void_reason
-            ) VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?)""",
+            ) VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?)""",
             (
                 r.record_id, r.experiment_run, _iso(r.timestamp), r.model_used,
-                r.market_id, r.market_question, r.market_type, r.resolution_window_hours, r.tier,
+                r.market_id, r.market_question, r.market_type, r.resolution_window_hours,
+                _iso(r.resolution_datetime), r.tier,
                 r.grok_raw_probability, r.grok_raw_confidence, r.grok_reasoning,
                 json.dumps(r.grok_signal_types), r.headline_only_signal,
                 r.calibration_adjustment, r.market_type_adjustment, r.signal_weight_adjustment,
@@ -122,6 +123,7 @@ class Database:
             brier_score_raw=row["brier_score_raw"],
             brier_score_adjusted=row["brier_score_adjusted"],
             resolved_at=_parse_dt(row["resolved_at"]),
+            resolution_datetime=_parse_dt(row["resolution_datetime"]),
             unrealized_adverse_move=row["unrealized_adverse_move"],
             voided=bool(row["voided"]),
             void_reason=row["void_reason"],

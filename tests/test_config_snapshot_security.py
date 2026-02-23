@@ -31,7 +31,7 @@ class TestSafeConfig:
         assert safe["ENVIRONMENT"] == "paper"
         assert safe["DB_PATH"] == "data/predictor.db"
         assert safe["TIER1_FEE_RATE"] == 0.0
-        assert safe["INITIAL_BANKROLL"] == 2000.0
+        assert safe["INITIAL_BANKROLL"] == 10000.0
 
     def test_safe_config_preserves_telegram_chat_id(self):
         settings = Settings(

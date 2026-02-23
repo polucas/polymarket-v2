@@ -551,6 +551,7 @@ class Scheduler:
             fee_rate=market.fee_rate,
             action="SKIP",
             skip_reason=reason,
+            resolution_datetime=market.resolution_time,
         )
 
     async def _record_skip(self, candidate: TradeCandidate, experiment_run: str) -> None:
@@ -584,6 +585,7 @@ class Scheduler:
             position_size_usd=candidate.position_size,
             kelly_fraction_used=candidate.kelly_fraction_used,
             market_cluster_id=candidate.market_cluster_id,
+            resolution_datetime=candidate.market.resolution_time,
         )
         await self._db.save_trade(record)
 

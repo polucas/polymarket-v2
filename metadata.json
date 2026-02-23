@@ -8,7 +8,7 @@
       "queries": {
         "todays_trades": {
           "title": "Today's trades",
-          "sql": "SELECT timestamp, market_question, market_type, action, ROUND(calculated_edge,4) as edge, ROUND(trade_score,4) as score, position_size_usd, pnl, actual_outcome FROM trade_records WHERE date(timestamp) = date('now') AND action IN ('BUY_YES', 'BUY_NO') ORDER BY timestamp DESC"
+          "sql": "SELECT timestamp, datetime(resolution_datetime) as resolves_at, resolution_window_hours as hours_til_resolution, market_question, market_type, action, ROUND(calculated_edge,4) as edge, ROUND(trade_score,4) as score, position_size_usd, pnl, actual_outcome FROM trade_records WHERE date(timestamp) = date('now') AND action IN ('BUY_YES', 'BUY_NO') ORDER BY timestamp DESC"
         },
         "portfolio_overview": {
           "title": "Portfolio overview",

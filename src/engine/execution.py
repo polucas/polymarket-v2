@@ -131,6 +131,7 @@ async def execute_trade(
         market_question=market.question,
         market_type=market.market_type,
         resolution_window_hours=candidate.resolution_hours,
+        resolution_datetime=market.resolution_time,
         tier=candidate.tier,
         grok_raw_probability=candidate.grok_raw_probability,
         grok_raw_confidence=candidate.grok_raw_confidence,
