@@ -556,7 +556,7 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 | Min confidence | 65% (adjusted) | Lower start, let Bayesian calibration correct |
 | Execution | Taker orders | Speed > rebate for news-driven moves |
 | Max position | 1.844% of bankroll | ~$160 max bet at $10k bankroll — conservative for event uncertainty |
-| Daily trade cap | 15 | Higher throughput with ranking keeping quality bar |
+| Daily trade cap | 20 | Higher throughput with ranking keeping quality bar |
 
 ### 5.2 Tier 2: Crypto Opportunist (Secondary — 20% of capital)
 

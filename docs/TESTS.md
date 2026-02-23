@@ -707,8 +707,8 @@ kelly_size() edge cases:
 33. max_position_pct=0.0 -> returns 0.0
 
 check_monk_mode():
-34. Tier 1 with 15 executed trades today -> False, "tier1_daily_cap_reached"
-35. Tier 1 with 14 executed trades -> passes this check
+34. Tier 1 with 20 executed trades today -> False, "tier1_daily_cap_reached"
+35. Tier 1 with 19 executed trades -> passes this check
 36. Tier 2 with 3 executed trades -> False, "tier2_daily_cap_reached"
 37. Today PnL = -$260 with equity $5000 (5.2% loss) -> False, "daily_loss_limit"
 38. Today PnL = -$240 (4.8% loss) -> passes this check
@@ -722,8 +722,8 @@ check_monk_mode():
 46. All checks pass -> True, None
 
 get_scan_mode():
-47. 15+ tier1 executed trades -> "observe_only"
-48. 14 tier1 executed + 2 tier1 skipped -> "active" (skips don't count)
+47. 20+ tier1 executed trades -> "observe_only"
+48. 19 tier1 executed + 2 tier1 skipped -> "active" (skips don't count)
 49. 0 tier1 trades -> "active"
 ```
 

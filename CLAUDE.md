@@ -89,7 +89,7 @@ docs/
 ## Key Configuration
 
 - **Bankroll:** $10,000 (set in `config.py` INITIAL_BANKROLL). Max bet ~$160 via `MAX_POSITION_PCT=0.01844` applied to live `portfolio.total_equity`.
-- **Tier 1:** 15-min scan interval, resolution 15min-7d, 15 trades/day cap, 0% fee
+- **Tier 1:** 15-min scan interval, resolution 15min-7d, 20 trades/day cap, 0% fee
 - **Tier 2:** 2-3 min scan (only during active news window), 15-min resolution, 3 trades/day cap
 - **Environment:** `ENVIRONMENT=paper` (start here) or `live`
 - **DB:** SQLite at `data/predictor.db` (WAL mode)
