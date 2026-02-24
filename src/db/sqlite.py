@@ -191,6 +191,15 @@ class Database:
         row = await cursor.fetchone()
         return row[0] if row else 0
 
+    async def get_open_market_ids(self) -> set:
+        """Return set of market_ids that have open (unresolved, non-voided, non-SKIP) trades."""
+        cursor = await self._conn.execute(
+            "SELECT DISTINCT market_id FROM trade_records "
+            "WHERE actual_outcome IS NULL AND voided = FALSE AND action != 'SKIP'"
+        )
+        rows = await cursor.fetchall()
+        return {r[0] for r in rows}
+
     async def get_all_resolved_trades(self, include_voided: bool = False) -> List[TradeRecord]:
         sql = "SELECT * FROM trade_records WHERE actual_outcome IS NOT NULL"
         if not include_voided:

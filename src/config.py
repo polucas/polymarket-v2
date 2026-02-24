@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     CONSECUTIVE_LOSS_COOLDOWN: int = 3
     COOLDOWN_DURATION_HOURS: float = 2.0
     DAILY_API_BUDGET_USD: float = 8.0
-    MAX_POSITION_PCT: float = 0.01844
+    MAX_POSITION_PCT: float = 0.016
     MAX_TOTAL_EXPOSURE_PCT: float = 0.30
     KELLY_FRACTION: float = 0.25
     MAX_CLUSTER_EXPOSURE_PCT: float = 0.12

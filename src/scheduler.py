@@ -180,6 +180,7 @@ class Scheduler:
             week_trades = await self._db.get_week_trades()
             api_spend = await self._db.get_today_api_spend()
             portfolio = await self._db.load_portfolio()
+            open_market_ids = await self._db.get_open_market_ids()
 
             scan_mode = get_scan_mode(today_trades, self._monk_config)
             if scan_mode == "observe_only" and not self._observe_only_alerted_today:
@@ -228,6 +229,7 @@ class Scheduler:
                         today_trades=today_trades,
                         experiment_run=experiment_run,
                         tier=1,
+                        open_market_ids=open_market_ids,
                     )
                 except Exception as e:
                     log.error("market_processing_error",
@@ -294,6 +296,7 @@ class Scheduler:
             week_trades = await self._db.get_week_trades()
             api_spend = await self._db.get_today_api_spend()
             portfolio = await self._db.load_portfolio()
+            open_market_ids = await self._db.get_open_market_ids()
 
             experiment = await get_current_experiment(self._db)
             experiment_run = experiment.run_id if experiment else "default"
@@ -323,6 +326,7 @@ class Scheduler:
                         today_trades=today_trades,
                         experiment_run=experiment_run,
                         tier=2,
+                        open_market_ids=open_market_ids,
                     )
                 except Exception as e:
                     log.error("tier2_market_error",
@@ -393,7 +397,15 @@ class Scheduler:
         today_trades: List[TradeRecord],
         experiment_run: str,
         tier: int,
+        open_market_ids: set = frozenset(),
     ) -> None:
+        # Skip if we already have an open position on this market
+        if market.market_id in open_market_ids:
+            log.info("market_already_has_open_position", market_id=market.market_id)
+            skip_record = self._build_skip_record(market, "already_has_open_position", experiment_run, tier)
+            await self._db.save_trade(skip_record)
+            return
+
         # Check if market type disabled by learning
         if self._market_type_mgr.should_disable(market.market_type):
             log.info("market_type_disabled", market_type=market.market_type)

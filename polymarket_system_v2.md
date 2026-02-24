@@ -555,7 +555,7 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 | Min edge threshold | 4% (high confidence) / 7% (moderate) | Minimum quality bar — ranking handles prioritization above this |
 | Min confidence | 65% (adjusted) | Lower start, let Bayesian calibration correct |
 | Execution | Taker orders | Speed > rebate for news-driven moves |
-| Max position | 1.844% of bankroll | ~$160 max bet at $10k bankroll — conservative for event uncertainty |
+| Max position | 1.6% of bankroll | $160 max bet at $10k bankroll — conservative for event uncertainty |
 | Daily trade cap | 20 | Higher throughput with ranking keeping quality bar |
 
 ### 5.2 Tier 2: Crypto Opportunist (Secondary — 20% of capital)
@@ -1133,7 +1133,7 @@ class MonkModeConfig:
     consecutive_loss_cooldown: int = 3   # 3 losses → 2h pause
     cooldown_duration_hours: float = 2.0
     daily_api_budget_usd: float = 8.0
-    max_position_pct: float = 0.01844    # ~1.8% per trade (~$160 at $10k bankroll)
+    max_position_pct: float = 0.016      # 1.6% per trade ($160 at $10k bankroll)
     max_total_exposure_pct: float = 0.30 # 30% total
     kelly_fraction: float = 0.25         # Quarter Kelly
 ```
@@ -1268,7 +1268,7 @@ def select_best_trades(
 
 ### 10.2 Correlated Market Detection
 
-Polymarket frequently lists multiple markets about the same underlying event: "Will the Fed cut rates?", "Will the Fed cut by 50bps?", "Will the Fed hold rates?" — all resolve on the same announcement. Without correlation detection, the system could take ~1.8% positions on all three, concentrating ~5.5% of bankroll on a single event.
+Polymarket frequently lists multiple markets about the same underlying event: "Will the Fed cut rates?", "Will the Fed cut by 50bps?", "Will the Fed hold rates?" — all resolve on the same announcement. Without correlation detection, the system could take 1.6% positions on all three, concentrating ~4.8% of bankroll on a single event.
 
 ```python
 from collections import defaultdict
@@ -1357,7 +1357,7 @@ def calculate_edge(adjusted_prob: float, market_price: float, fee_rate: float) -
 ```python
 def kelly_size(adjusted_prob: float, market_price: float, side: str,
                bankroll: float, kelly_fraction: float = 0.25,
-               max_position_pct: float = 0.01844) -> float:
+               max_position_pct: float = 0.016) -> float:
     """
     Correct Kelly for binary prediction markets.
     
@@ -1374,7 +1374,7 @@ def kelly_size(adjusted_prob: float, market_price: float, side: str,
         Naive:   f* = 0.05 (5%)
         Correct: f* = (0.95 - 0.90) / (1 - 0.90) = 0.50 (50%)
       The market pays 10:1 on a 5% edge — Kelly wants heavy exposure.
-      Quarter Kelly + ~1.8% cap still limits actual position to ~$160, but the
+      Quarter Kelly + 1.6% cap still limits actual position to $160, but the
       RANKING of trades changes: high-price YES bets rank much higher.
     """
     if side == "BUY_YES":

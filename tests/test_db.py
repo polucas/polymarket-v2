@@ -100,6 +100,24 @@ class TestTradeRecordCRUD:
         count = await db.count_open_trades()
         assert count == 1
 
+    async def test_get_open_market_ids(self, db, sample_trade_record):
+        # Two open trades on different markets
+        await db.save_trade(sample_trade_record(action="BUY_YES", market_id="market_open_1"))
+        await db.save_trade(sample_trade_record(action="BUY_NO", market_id="market_open_2"))
+        # Resolved trade — should NOT appear
+        await db.save_trade(sample_trade_record(action="BUY_YES", market_id="market_resolved", actual_outcome=True, pnl=10.0))
+        # Voided trade — should NOT appear
+        await db.save_trade(sample_trade_record(action="BUY_YES", market_id="market_voided", voided=True, void_reason="test"))
+        # SKIP — should NOT appear
+        await db.save_trade(sample_trade_record(action="SKIP", market_id="market_skip", skip_reason="low_edge"))
+
+        result = await db.get_open_market_ids()
+        assert result == {"market_open_1", "market_open_2"}
+
+    async def test_get_open_market_ids_empty(self, db):
+        result = await db.get_open_market_ids()
+        assert result == set()
+
 
 @pytest.mark.asyncio
 class TestCalibrationPersistence:
