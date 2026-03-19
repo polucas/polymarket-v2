@@ -16,14 +16,14 @@ pip install -r requirements.txt
 python -m src.main                    # FastAPI on 0.0.0.0:8000
 
 # Tests
-pytest                                # All tests (~458 cases)
+pytest                                # All tests (~503 cases)
 pytest tests/test_config.py           # Single file
 pytest -k "calibration"               # By keyword
 
 # CLI management
-python -m src.manage model_swap --old-model "grok-4-1-fast-reasoning" --new-model "..." --reason "..."
+python -m src.manage model_swap --old-model "grok-4.20-experimental-beta-0304-reasoning" --new-model "..." --reason "..."
 python -m src.manage void_trade --trade-id "<uuid>" --reason "..."
-python -m src.manage start_experiment --description "..." --model "grok-4-1-fast-reasoning"
+python -m src.manage start_experiment --description "..." --model "grok-4.20-experimental-beta-0304-reasoning"
 python -m src.manage end_experiment --run-id "<uuid>"
 python -m src.manage recalculate_learning
 ```
@@ -34,13 +34,13 @@ python -m src.manage recalculate_learning
 src/
 ├── main.py                  # FastAPI app + lifespan (experiment auto-creation, file logging, startup/shutdown alerts)
 ├── config.py                # Pydantic Settings (40+ env vars) + MonkModeConfig
-├── models.py                # 19 dataclasses (Signal, Market, TradeRecord, Portfolio, etc.)
+├── models.py                # 20 dataclasses (Signal, Market, TradeRecord, Portfolio, DailyReview, etc.)
 ├── alerts.py                # Telegram alerting (9 alert types)
-├── scheduler.py             # APScheduler: Tier 1 (15min), resolution (5min), daily summary, skip records for audit trail
+├── scheduler.py             # APScheduler: Tier 1 (15min), resolution (5min), daily summary, self-check, skip records for audit trail
 ├── manage.py                # CLI: model_swap, void_trade, experiments
 ├── db/
-│   ├── sqlite.py            # Async SQLite wrapper (aiosqlite, 9 tables)
-│   └── migrations.py        # DDL schema, idempotent migrations
+│   ├── sqlite.py            # Async SQLite wrapper (aiosqlite, 10 tables)
+│   └── migrations.py        # DDL schema, idempotent migrations (v4)
 ├── pipelines/
 │   ├── signal_classifier.py # Deterministic S1-S6 source tier classification
 │   ├── twitter.py           # TwitterAPI.io client
@@ -59,11 +59,12 @@ src/
     ├── signal_tracker.py    # (source_tier x info_type x market_type) lift calculation
     ├── adjustment.py        # 5-step pipeline: calibrate -> signal weight -> shrink -> penalty -> decay
     ├── experiments.py       # Experiment run management
+    ├── self_check.py        # Daily self-check loop (Karpathy Autoresearch inspired)
     └── model_swap.py        # Model swap protocol (reset/dampen/preserve)
 config/
 ├── known_sources.yaml       # S1-S6 tier mappings (handles, domains, keywords)
 └── rss_feeds.yaml           # RSS feed URLs (Reuters, AP, BBC, CoinDesk)
-tests/                       # 22 test files mirroring src/ structure
+tests/                       # 24 test files mirroring src/ structure
 docs/
 ├── TASKS.md                 # 12 dev agent specs (DEV-01 through DEV-12)
 └── TESTS.md                 # 10 test agent specs with execution DAG
@@ -82,17 +83,26 @@ docs/
 4. Market-type edge penalty
 5. Temporal confidence decay
 
-**Risk management (Monk Mode):** Daily loss -5%, weekly -10%, consecutive adverse cooldown (3+), max exposure 30%, API budget $8/day. All enforced in `src/engine/trade_decision.py`.
+**Risk management (Monk Mode):** Daily loss -5%, weekly -10%, consecutive adverse cooldown (3+), max exposure 30%, API budget $15/day. All enforced in `src/engine/trade_decision.py`.
+
+**Duplicate bet prevention:** 24h cooldown after trading a market (`MARKET_COOLDOWN_HOURS`), plus Jaccard keyword-overlap similarity check at 60% threshold (`QUESTION_SIMILARITY_THRESHOLD`) to block near-duplicate questions. Skip reasons: `market_cooldown`, `similar_to_{id}`.
+
+**Daily self-check (Autoresearch):** Runs 15 min after nightly summary. Gathers metrics (win rate, ROI, Brier by type, calibration drift, skip reasons), calls Grok for analysis, persists to `daily_reviews` table + `data/daily_reviews/*.md`, sends Telegram alert. Does NOT auto-implement changes.
 
 **Trade scoring:** `edge x adjusted_confidence x (1.0 / max(resolution_hours, 0.5))`. Candidates are ranked per scan cycle, not first-come-first-served. Cluster detection prevents overexposure to correlated markets.
 
 ## Key Configuration
 
+- **Model:** `GROK_MODEL` env var, default `grok-4.20-experimental-beta-0304-reasoning` (configurable in `.env`)
 - **Bankroll:** $10,000 (set in `config.py` INITIAL_BANKROLL). Max bet $160 via `MAX_POSITION_PCT=0.016` applied to live `portfolio.total_equity`.
-- **Tier 1:** 15-min scan interval, resolution 15min-7d, 20 trades/day cap, 0% fee
+- **Tier 1:** 15-min scan interval, resolution 15min-7d, 20 trades/day cap, 0% fee, 3% min edge
 - **Tier 2:** 2-3 min scan (only during active news window), 15-min resolution, 3 trades/day cap
+- **Market fetch:** 200 markets per scan (`MARKET_FETCH_LIMIT=200`)
+- **API budget:** $15/day (`DAILY_API_BUDGET_USD=15.0`)
+- **Duplicate prevention:** 24h market cooldown, 60% question similarity threshold
 - **Environment:** `ENVIRONMENT=paper` (start here) or `live`
 - **DB:** SQLite at `data/predictor.db` (WAL mode)
+- **Dashboard:** `/health` (status), `/reviews` and `/reviews/{date}` (daily self-check reports)
 
 ## Conventions
 
@@ -111,4 +121,7 @@ docs/
 - Kelly sizing uses quarter Kelly (`KELLY_FRACTION=0.25`), not full Kelly. This is intentional conservatism.
 - Resolution window for Tier 1 is 15min to 7 days (was 1-24h, changed because that range was empty on Polymarket).
 - **TIER1_FEE_RATE must be 0.0** for fee-free markets. A non-zero value creates a phantom fee that eats into edge calculations and causes valid trades to fall below the minimum edge threshold.
-- **Skip records:** The scheduler saves SKIP trade records for all early returns (grok failure, position too small, market type disabled, low edge). These are essential for debugging "why didn't it trade?" — always check the `skip_reason` column.
+- **Skip records:** The scheduler saves SKIP trade records for all early returns (grok failure, position too small, market type disabled, low edge, market cooldown, similar question). These are essential for debugging "why didn't it trade?" — always check the `skip_reason` column.
+- **GROK_MODEL env var:** Model name is no longer hardcoded. Set `GROK_MODEL` in `.env` to change models. After changing, run `python -m src.manage model_swap` to reset calibration properly.
+- **Paper mode relaxations:** Min position threshold is $0.50 in paper mode vs $1.00 in live. `TIER1_MIN_EDGE` defaults to 0.03 (can increase for live).
+- **Daily reviews:** Written to both DB (`daily_reviews` table) and `data/daily_reviews/YYYY-MM-DD.md`. Check `/reviews` endpoint or the markdown files for daily performance analysis.

@@ -1,8 +1,17 @@
 # Polymarket Prediction System v2.5 — Complete Project Bible
 
-> **Version:** 2.5 | **Last updated:** 2026-02-23
-> **Status:** Paper trading active on VPS
-> **Bankroll:** $10,000 | **Monthly OpEx target:** <$30
+> **Version:** 2.6 | **Last updated:** 2026-03-19
+> **Status:** Paper trading (restarted after 2-week pause)
+> **Bankroll:** $10,000 | **Monthly OpEx target:** <$35
+>
+> **v2.6 changes:**
+> - Model upgraded to `grok-4.20-experimental-beta-0304-reasoning` via new configurable `GROK_MODEL` env var (no more hardcoded model names)
+> - Added duplicate bet prevention: 24h cooldown after trading a market + Jaccard keyword-overlap similarity check (60% threshold) blocks near-duplicate questions. Skip reasons: `market_cooldown`, `similar_to_{id}`.
+> - Added daily self-check loop (Karpathy "Autoresearch" inspired): gathers metrics, calls Grok for analysis, persists `DailyReview` to DB + `data/daily_reviews/*.md`, sends Telegram alert with health status and recommendations. Does NOT auto-implement changes.
+> - Relaxed paper trading constraints for faster evaluation: `TIER1_MIN_EDGE` 4%→3%, market fetch 100→200, API budget $8→$15/day, paper mode min position $1→$0.50. Target: 5+ trades/day.
+> - New API endpoints: `GET /reviews` and `GET /reviews/{date}` for daily self-check reports.
+> - New DB table: `daily_reviews` (migration v4). New index on `trade_records(market_id, action)` (migration v3).
+> - Fixed pre-existing test failures from stale endDate values in polymarket test mocks.
 >
 > **v2.5 changes:**
 > - Fixed critical FK constraint blocker: `trade_records.experiment_run` references `experiment_runs(run_id)` — without a row in `experiment_runs`, all `save_trade()` calls fail silently. Lifespan now auto-creates an experiment run on startup if none exists.
@@ -85,7 +94,7 @@ Everything you need before writing a single line of code.
 | Account | URL | What For | Cost | Setup Notes |
 |---------|-----|----------|------|-------------|
 | **Polymarket** | https://polymarket.com | Trading (paper then live) | Free to create; funded via USDC on Polygon | Need wallet (MetaMask/Rabby). KYC may be required for withdrawals. |
-| **xAI (Grok API)** | https://console.x.ai | LLM for probability estimation | Pay-as-you-go (~$6.42/mo) | API key needed. Model: `grok-4-1-fast-reasoning`. |
+| **xAI (Grok API)** | https://console.x.ai | LLM for probability estimation | Pay-as-you-go (~$6.42/mo) | API key needed. Model: configurable via `GROK_MODEL` env var (default: `grok-4.20-experimental-beta-0304-reasoning`). |
 | **TwitterAPI.io** | https://twitterapi.io | Social signal ingestion | Pay-as-you-go (~$15.30/mo) | API key needed. Unofficial Twitter API proxy. |
 | **Hetzner Cloud** | https://console.hetzner.cloud | VPS hosting (24/7 operation) | €4.35/mo (CX22) | EU datacenter. See Section 2 for setup. |
 | **GitHub** | https://github.com | Code repository + CI | Free | Private repo recommended. |
@@ -552,7 +561,7 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 | Market types | Political, regulatory, economic, cultural, sports | Fee-free on Polymarket |
 | Resolution window | 15 min - 7 days | Polymarket event markets mostly resolve in 1-7 day range; floor at 15 min captures fast-moving markets (see 5.3) |
 | Fee rate | 0% (fee-free markets) | No taker fees on non-crypto, non-sports markets |
-| Min edge threshold | 4% (high confidence) / 7% (moderate) | Minimum quality bar — ranking handles prioritization above this |
+| Min edge threshold | 3% (`TIER1_MIN_EDGE=0.03`, was 4% pre-v2.6) | Lowered for paper trading volume; increase for live |
 | Min confidence | 65% (adjusted) | Lower start, let Bayesian calibration correct |
 | Execution | Taker orders | Speed > rebate for news-driven moves |
 | Max position | 1.6% of bankroll | $160 max bet at $10k bankroll — conservative for event uncertainty |
@@ -765,9 +774,9 @@ Three layers, each operating on different timescales.
 @dataclass
 class TradeRecord:
     record_id: str                    # UUID
-    experiment_run: str               # e.g. "grok-4-1-fast-reasoning_20260220"
+    experiment_run: str               # e.g. "run_20260319_120000"
     timestamp: datetime
-    model_used: str                   # "grok-4-1-fast-reasoning"
+    model_used: str                   # From GROK_MODEL env var
     
     market_id: str
     market_question: str
@@ -1068,8 +1077,8 @@ Optional parallel test: for 20-30 markets, send identical context to both old an
 ### 8.3 Execute the Swap
 
 ```bash
-python manage.py model_swap \
-  --old-model "grok-4-1-fast-reasoning" \
+python -m src.manage model_swap \
+  --old-model "grok-4.20-experimental-beta-0304-reasoning" \
   --new-model "grok-5-fast" \
   --reason "Grok 5 released, 30% reasoning improvement claimed, 2 weeks stable"
 ```
@@ -1132,11 +1141,21 @@ class MonkModeConfig:
     weekly_loss_limit_pct: float = 0.10  # -10% → stop for week
     consecutive_loss_cooldown: int = 3   # 3 losses → 2h pause
     cooldown_duration_hours: float = 2.0
-    daily_api_budget_usd: float = 8.0
+    daily_api_budget_usd: float = 15.0   # Increased from $8 in v2.6 for paper volume
     max_position_pct: float = 0.016      # 1.6% per trade ($160 at $10k bankroll)
     max_total_exposure_pct: float = 0.30 # 30% total
     kelly_fraction: float = 0.25         # Quarter Kelly
 ```
+
+### 9.1b Duplicate Bet Prevention (added v2.6)
+
+In addition to Monk Mode, the scheduler prevents duplicate bets via:
+
+1. **Open position check**: Exact `market_id` match — skips if already holding a position
+2. **Cooldown check**: `MARKET_COOLDOWN_HOURS=24.0` — skips markets traded within window (even if resolved)
+3. **Similarity check**: `QUESTION_SIMILARITY_THRESHOLD=0.60` — Jaccard keyword overlap blocks near-duplicate questions of the same `market_type`
+
+All blocks produce auditable SKIP records (`market_cooldown`, `similar_to_{id}`).
 
 ### 9.2 Enforcement
 
@@ -1905,6 +1924,33 @@ CREATE TABLE daily_mode_log (
     grok_calls_saved INTEGER DEFAULT 0,
     cost_saved_usd REAL DEFAULT 0.0
 );
+
+-- Added in v2.6 (migration v4)
+CREATE TABLE daily_reviews (
+    review_date TEXT PRIMARY KEY,
+    timestamp TEXT NOT NULL,
+    trade_count INTEGER DEFAULT 0,
+    skip_count INTEGER DEFAULT 0,
+    resolved_count INTEGER DEFAULT 0,
+    win_rate REAL,
+    roi_pct REAL,
+    total_pnl REAL,
+    avg_brier_raw REAL,
+    avg_brier_adjusted REAL,
+    brier_by_market_type TEXT,          -- JSON
+    calibration_drift TEXT,             -- JSON
+    signal_effectiveness TEXT,          -- JSON
+    skip_reason_distribution TEXT,      -- JSON
+    top_performing_types TEXT,          -- JSON
+    worst_performing_types TEXT,        -- JSON
+    llm_insights TEXT,                  -- Grok analysis text
+    llm_recommendations TEXT,           -- JSON list
+    health_status TEXT,                 -- HEALTHY / CAUTION / CONCERN
+    experiment_run TEXT REFERENCES experiment_runs(run_id)
+);
+
+-- Index added in v2.6 (migration v3)
+CREATE INDEX idx_trades_market_id_action ON trade_records(market_id, action) WHERE action != 'SKIP';
 ```
 
 ---
@@ -1929,7 +1975,7 @@ CREATE TABLE daily_mode_log (
 
 ### 14.2 Cost as % of Bankroll
 
-With $10,000 bankroll: monthly OpEx = **0.26%** of bankroll. System needs **~0.3% monthly return** to break even on costs. Larger bankroll significantly lowers the cost hurdle. In volatile crypto periods where Tier 2 activates frequently, costs could reach ~$32/month (0.32%).
+With $10,000 bankroll: monthly OpEx = **~0.30-0.35%** of bankroll. System needs **~0.35% monthly return** to break even on costs. The daily self-check adds ~1 Grok call/day (~$0.10-0.50), negligible vs budget. In volatile crypto periods where Tier 2 activates frequently, costs could reach ~$38/month (0.38%). API budget is $15/day (increased from $8 in v2.6 for higher paper trade volume).
 
 ### 14.3 Observe-Only Savings
 
@@ -1964,6 +2010,7 @@ polymarket-predictor-v2/
 │   │   ├── signal_tracker.py    # 2D signal-type weighting
 │   │   ├── adjustment.py        # Combined adjustment pipeline
 │   │   ├── experiments.py       # Experiment run management
+│   │   ├── self_check.py        # Daily self-check loop (Autoresearch)
 │   │   └── model_swap.py        # Model swap protocol
 │   ├── db/
 │   │   ├── sqlite.py            # SQLite wrapper
@@ -1975,6 +2022,7 @@ polymarket-predictor-v2/
 ├── data/
 │   ├── predictor.db             # SQLite database
 │   ├── bot.log                  # Persistent log file (structlog JSON lines)
+│   ├── daily_reviews/           # Daily self-check markdown reports (YYYY-MM-DD.md)
 │   └── backups/                 # Daily DB snapshots
 ├── tests/
 │   ├── test_calibration.py
@@ -2068,6 +2116,22 @@ async def health():
 ---
 
 ## 16. Dashboard & Monitoring
+
+### 16.0 Daily Self-Check API (added v2.6)
+
+The FastAPI app exposes daily self-check reports at:
+- `GET /reviews` — last 30 days of daily reviews (JSON)
+- `GET /reviews/{date}` — single review detail (e.g., `/reviews/2026-03-19`)
+
+Reports are also written as markdown to `data/daily_reviews/YYYY-MM-DD.md` and sent via Telegram.
+
+The self-check runs at `DAILY_SUMMARY_HOUR_UTC:15` (15 min after daily summary) via `src/learning/self_check.py`. It:
+1. Gathers metrics (win rate, ROI, Brier by market type, calibration drift, skip reasons)
+2. Calls Grok for analysis (insights, recommendations, health status: HEALTHY/CAUTION/CONCERN)
+3. Persists to `daily_reviews` DB table + markdown file
+4. Sends Telegram alert with summary
+
+**Design principle (Karpathy Autoresearch):** The system evaluates itself but does NOT auto-implement changes. It only documents findings and recommendations for human review.
 
 ### 16.1 Phase 1: Datasette (Paper Trading Period)
 
