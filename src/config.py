@@ -21,12 +21,14 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "paper"  # "paper" or "live"
     DB_PATH: str = "data/predictor.db"
     LOG_LEVEL: str = "INFO"
+    GROK_MODEL: str = "grok-4.20-experimental-beta-0304-reasoning"
 
     # Tier 1 Config
     TIER1_SCAN_INTERVAL_MINUTES: int = 15
-    TIER1_MIN_EDGE: float = 0.04
+    TIER1_MIN_EDGE: float = 0.03
     TIER1_DAILY_CAP: int = 20
     TIER1_FEE_RATE: float = 0.0
+    MARKET_FETCH_LIMIT: int = 200
 
     # Tier 2 Config
     TIER2_SCAN_INTERVAL_MINUTES: int = 3
@@ -39,11 +41,15 @@ class Settings(BaseSettings):
     WEEKLY_LOSS_LIMIT_PCT: float = 0.10
     CONSECUTIVE_LOSS_COOLDOWN: int = 3
     COOLDOWN_DURATION_HOURS: float = 2.0
-    DAILY_API_BUDGET_USD: float = 8.0
+    DAILY_API_BUDGET_USD: float = 15.0
     MAX_POSITION_PCT: float = 0.016
     MAX_TOTAL_EXPOSURE_PCT: float = 0.30
     KELLY_FRACTION: float = 0.25
     MAX_CLUSTER_EXPOSURE_PCT: float = 0.12
+
+    # Duplicate Prevention
+    MARKET_COOLDOWN_HOURS: float = 24.0
+    QUESTION_SIMILARITY_THRESHOLD: float = 0.60
 
     # Alerts
     DAILY_SUMMARY_HOUR_UTC: int = 0  # Hour of day (UTC) to send daily summary

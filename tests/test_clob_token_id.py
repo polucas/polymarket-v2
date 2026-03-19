@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -19,7 +19,7 @@ def _make_gamma_market(**overrides):
         "id": "517310",
         "question": "Will X happen?",
         "outcomePrices": '["0.55", "0.45"]',
-        "endDate": "2026-02-25T12:00:00Z",
+        "endDate": (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "liquidity": "20000",
         "volume24hr": "5000",
         "outcomes": '["Yes", "No"]',
@@ -35,6 +35,7 @@ class TestClobTokenIdExtraction:
     @pytest.mark.asyncio
     async def test_market_has_clob_token_ids(self):
         settings = MagicMock(spec=Settings)
+        settings.MARKET_FETCH_LIMIT = 200
         client = PolymarketClient(settings)
 
         mock_resp = MagicMock()
@@ -59,6 +60,7 @@ class TestClobTokenIdExtraction:
     @pytest.mark.asyncio
     async def test_missing_clob_token_ids_defaults_empty(self):
         settings = MagicMock(spec=Settings)
+        settings.MARKET_FETCH_LIMIT = 200
         client = PolymarketClient(settings)
 
         mock_resp = MagicMock()
@@ -84,6 +86,7 @@ class TestGetOrderbookTokenId:
     @pytest.mark.asyncio
     async def test_orderbook_passes_token_id_to_clob(self):
         settings = MagicMock(spec=Settings)
+        settings.MARKET_FETCH_LIMIT = 200
         client = PolymarketClient(settings)
 
         mock_resp = MagicMock()
@@ -107,6 +110,7 @@ class TestGetOrderbookTokenId:
     @pytest.mark.asyncio
     async def test_empty_token_id_returns_empty_orderbook(self):
         settings = MagicMock(spec=Settings)
+        settings.MARKET_FETCH_LIMIT = 200
         client = PolymarketClient(settings)
 
         ob = await client.get_orderbook("", market_id="517310")

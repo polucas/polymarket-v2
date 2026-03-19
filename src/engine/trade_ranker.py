@@ -19,6 +19,11 @@ def _keyword_overlap(kw1: List[str], kw2: List[str]) -> float:
     return len(s1 & s2) / len(s1 | s2)
 
 
+def keyword_overlap(keywords_a: List[str], keywords_b: List[str]) -> float:
+    """Jaccard similarity between two keyword lists (public alias for _keyword_overlap)."""
+    return _keyword_overlap(keywords_a, keywords_b)
+
+
 def detect_market_clusters(candidates: List[TradeCandidate]) -> Dict[str, str]:
     """Detect correlated market clusters.
     Group by market_type, then within same category: sort by resolution_time.

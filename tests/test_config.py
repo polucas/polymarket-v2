@@ -25,20 +25,32 @@ class TestSettings:
 
     def test_initial_bankroll_default(self):
         s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
-        assert s.INITIAL_BANKROLL == 2000.0
+        assert s.INITIAL_BANKROLL == 10000.0
+
+    def test_tier1_min_edge_default(self):
+        s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
+        assert s.TIER1_MIN_EDGE == 0.03
+
+    def test_daily_api_budget_default(self):
+        s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
+        assert s.DAILY_API_BUDGET_USD == 15.0
+
+    def test_market_fetch_limit_default(self):
+        s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
+        assert s.MARKET_FETCH_LIMIT == 200
 
 
 class TestMonkModeConfig:
     def test_from_settings(self):
         s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
         m = MonkModeConfig.from_settings(s)
-        assert m.tier1_daily_trade_cap == 5
+        assert m.tier1_daily_trade_cap == 20
         assert m.tier2_daily_trade_cap == 3
         assert m.daily_loss_limit_pct == 0.05
         assert m.weekly_loss_limit_pct == 0.10
         assert m.consecutive_loss_cooldown == 3
         assert m.cooldown_duration_hours == 2.0
-        assert m.daily_api_budget_usd == 8.0
-        assert m.max_position_pct == 0.08
+        assert m.daily_api_budget_usd == 15.0
+        assert m.max_position_pct == 0.016
         assert m.max_total_exposure_pct == 0.30
         assert m.kelly_fraction == 0.25

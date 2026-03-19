@@ -41,7 +41,7 @@ class PolymarketClient:
         """
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                params = {"active": "true", "closed": "false", "limit": 100}
+                params = {"active": "true", "closed": "false", "limit": self._settings.MARKET_FETCH_LIMIT}
                 resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
                 if resp.status_code == 429:
                     log.warning("polymarket_rate_limited")

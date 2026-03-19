@@ -379,3 +379,43 @@ class TestPlaceOrder:
         result = await client.place_order("market-1", "BUY_YES", 0.60, 50.0)
         assert result["status"] == "rejected"
         assert result["reason"] == "paper_mode"
+
+
+# ---------------------------------------------------------------------------
+# MARKET_FETCH_LIMIT — configurable market fetch limit
+# ---------------------------------------------------------------------------
+
+
+class TestMarketFetchLimit:
+    def test_default_market_fetch_limit_is_200(self):
+        """MARKET_FETCH_LIMIT defaults to 200 in Settings."""
+        settings = _make_settings()
+        assert settings.MARKET_FETCH_LIMIT == 200
+
+    @pytest.mark.asyncio
+    async def test_market_fetch_limit_used_in_api_call(self):
+        """get_active_markets passes MARKET_FETCH_LIMIT to the API query params."""
+        settings = _make_settings()
+        # Override to a custom value to verify it's forwarded
+        settings = Settings(
+            XAI_API_KEY="test-key",
+            POLYMARKET_API_KEY="test-pm-key",
+            MARKET_FETCH_LIMIT=150,
+        )
+        client = PolymarketClient(settings)
+
+        mock_resp = _mock_response(json_data=[])
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_resp)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
+            await client.get_active_markets(tier=1)
+
+        call_kwargs = mock_client_instance.get.call_args
+        params = call_kwargs[1].get("params") or call_kwargs[0][1] if len(call_kwargs[0]) > 1 else call_kwargs.kwargs.get("params")
+        # Extract params from the call
+        assert call_kwargs is not None
+        actual_params = mock_client_instance.get.call_args.kwargs.get("params") or mock_client_instance.get.call_args[1].get("params")
+        assert actual_params["limit"] == 150

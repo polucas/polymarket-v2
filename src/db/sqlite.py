@@ -200,6 +200,30 @@ class Database:
         rows = await cursor.fetchall()
         return {r[0] for r in rows}
 
+    async def get_recently_traded_market_ids(self, cooldown_hours: float) -> set:
+        """Return market_ids traded (executed, not SKIP) within the cooldown window."""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)).isoformat()
+        cursor = await self._conn.execute(
+            "SELECT DISTINCT market_id FROM trade_records "
+            "WHERE action != 'SKIP' AND timestamp >= ?",
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+        return {r[0] for r in rows}
+
+    async def get_recent_market_questions(self, hours: float) -> list:
+        """Return (market_id, question, market_type) for recently traded markets."""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        cursor = await self._conn.execute(
+            "SELECT DISTINCT market_id, market_question, market_type FROM trade_records "
+            "WHERE action != 'SKIP' AND timestamp >= ? AND market_question IS NOT NULL",
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+        return [(r[0], r[1], r[2]) for r in rows]
+
     async def get_all_resolved_trades(self, include_voided: bool = False) -> List[TradeRecord]:
         sql = "SELECT * FROM trade_records WHERE actual_outcome IS NOT NULL"
         if not include_voided:
@@ -463,3 +487,108 @@ class Database:
             ),
         )
         await self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Daily Reviews
+    # ------------------------------------------------------------------
+
+    async def save_daily_review(self, review) -> None:
+        """Save a daily review record."""
+        await self._conn.execute(
+            """INSERT OR REPLACE INTO daily_reviews
+            (review_date, timestamp, trade_count, skip_count, resolved_count,
+             win_rate, roi_pct, total_pnl, avg_brier_raw, avg_brier_adjusted,
+             brier_by_market_type, calibration_drift, signal_effectiveness,
+             skip_reason_distribution, top_performing_types, worst_performing_types,
+             llm_insights, llm_recommendations, health_status, experiment_run)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                review.review_date, review.timestamp.isoformat(),
+                review.trade_count, review.skip_count, review.resolved_count,
+                review.win_rate, review.roi_pct, review.total_pnl,
+                review.avg_brier_raw, review.avg_brier_adjusted,
+                json.dumps(review.brier_by_market_type), json.dumps(review.calibration_drift),
+                json.dumps(review.signal_effectiveness), json.dumps(review.skip_reason_distribution),
+                json.dumps(review.top_performing_types), json.dumps(review.worst_performing_types),
+                review.llm_insights, json.dumps(review.llm_recommendations),
+                review.health_status, review.experiment_run,
+            ),
+        )
+        await self._conn.commit()
+
+    async def get_daily_review(self, date: str):
+        """Get a specific daily review by date."""
+        cursor = await self._conn.execute(
+            "SELECT * FROM daily_reviews WHERE review_date = ?", (date,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_daily_review(row)
+
+    async def get_recent_reviews(self, days: int = 30):
+        """Get the last N days of daily reviews."""
+        from datetime import timedelta
+        cutoff = (_utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        cursor = await self._conn.execute(
+            "SELECT * FROM daily_reviews WHERE review_date >= ? ORDER BY review_date DESC",
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_daily_review(r) for r in rows]
+
+    def _row_to_daily_review(self, row):
+        """Convert a DB row to a DailyReview object."""
+        from src.models import DailyReview
+        # Use named column access (aiosqlite.Row supports it)
+        return DailyReview(
+            review_date=row["review_date"],
+            timestamp=_parse_dt(row["timestamp"]) or _utcnow(),
+            trade_count=row["trade_count"] or 0,
+            skip_count=row["skip_count"] or 0,
+            resolved_count=row["resolved_count"] or 0,
+            win_rate=row["win_rate"],
+            roi_pct=row["roi_pct"],
+            total_pnl=row["total_pnl"] or 0.0,
+            avg_brier_raw=row["avg_brier_raw"],
+            avg_brier_adjusted=row["avg_brier_adjusted"],
+            brier_by_market_type=json.loads(row["brier_by_market_type"]) if row["brier_by_market_type"] else {},
+            calibration_drift=json.loads(row["calibration_drift"]) if row["calibration_drift"] else {},
+            signal_effectiveness=json.loads(row["signal_effectiveness"]) if row["signal_effectiveness"] else {},
+            skip_reason_distribution=json.loads(row["skip_reason_distribution"]) if row["skip_reason_distribution"] else {},
+            top_performing_types=json.loads(row["top_performing_types"]) if row["top_performing_types"] else [],
+            worst_performing_types=json.loads(row["worst_performing_types"]) if row["worst_performing_types"] else [],
+            llm_insights=row["llm_insights"] or "",
+            llm_recommendations=json.loads(row["llm_recommendations"]) if row["llm_recommendations"] else [],
+            health_status=row["health_status"] or "UNKNOWN",
+            experiment_run=row["experiment_run"] or "",
+        )
+
+    async def get_period_trade_stats(self, start_date: str, end_date: str) -> dict:
+        """Get aggregated trade stats for a date range."""
+        cursor = await self._conn.execute(
+            """SELECT
+                SUM(CASE WHEN action != 'SKIP' THEN 1 ELSE 0 END) as trade_count,
+                SUM(CASE WHEN action = 'SKIP' THEN 1 ELSE 0 END) as skip_count,
+                SUM(CASE WHEN actual_outcome IS NOT NULL AND action != 'SKIP' THEN 1 ELSE 0 END) as resolved_count,
+                SUM(CASE WHEN pnl > 0 AND action != 'SKIP' THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN actual_outcome IS NOT NULL AND action != 'SKIP' THEN 1 ELSE 0 END) as total_resolved,
+                SUM(CASE WHEN action != 'SKIP' THEN pnl ELSE 0 END) as total_pnl,
+                AVG(CASE WHEN action != 'SKIP' AND brier_score_raw IS NOT NULL THEN brier_score_raw ELSE NULL END) as avg_brier_raw,
+                AVG(CASE WHEN action != 'SKIP' AND brier_score_adjusted IS NOT NULL THEN brier_score_adjusted ELSE NULL END) as avg_brier_adjusted
+            FROM trade_records
+            WHERE date(timestamp) BETWEEN ? AND ?
+              AND voided = FALSE""",
+            (start_date, end_date),
+        )
+        row = await cursor.fetchone()
+        return {
+            "trade_count": row[0] or 0,
+            "skip_count": row[1] or 0,
+            "resolved_count": row[2] or 0,
+            "wins": row[3] or 0,
+            "total_resolved": row[4] or 0,
+            "total_pnl": row[5] or 0.0,
+            "avg_brier_raw": row[6],
+            "avg_brier_adjusted": row[7],
+        }

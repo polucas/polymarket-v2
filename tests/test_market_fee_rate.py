@@ -1,6 +1,7 @@
 """Tests for market fee_rate from config."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,7 +15,7 @@ def _make_gamma_market(**overrides):
         "id": "517310",
         "question": "Will X happen?",
         "outcomePrices": '["0.55", "0.45"]',
-        "endDate": "2026-02-25T12:00:00Z",
+        "endDate": (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "liquidity": "20000",
         "volume24hr": "5000",
         "clobTokenIds": '["111", "222"]',
@@ -29,6 +30,7 @@ class TestMarketFeeRate:
     @pytest.mark.asyncio
     async def test_tier1_market_fee_rate_zero(self):
         settings = MagicMock(spec=Settings)
+        settings.MARKET_FETCH_LIMIT = 200
         client = PolymarketClient(settings)
 
         mock_resp = MagicMock()
@@ -51,6 +53,7 @@ class TestMarketFeeRate:
     @pytest.mark.asyncio
     async def test_tier2_market_fee_rate(self):
         settings = MagicMock(spec=Settings)
+        settings.MARKET_FETCH_LIMIT = 200
         client = PolymarketClient(settings)
 
         # Use a crypto market for tier 2
@@ -58,7 +61,7 @@ class TestMarketFeeRate:
         mock_resp.status_code = 200
         mock_resp.json.return_value = [_make_gamma_market(
             question="Will Bitcoin hit $100k?",
-            endDate="2026-02-22T12:30:00Z",
+            endDate=(datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )]
         mock_resp.raise_for_status = MagicMock()
 

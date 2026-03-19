@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
             run_id=run_id,
             description="Auto-created on startup",
             config=settings.safe_config(),
-            model="grok-4-1-fast-reasoning",
+            model=settings.GROK_MODEL,
             db=db,
         )
         log.info("experiment_created", run_id=run_id)
@@ -215,6 +215,51 @@ async def health():
 
     status_code = 200 if not stale else 503
     return JSONResponse(content=body, status_code=status_code)
+
+
+def _review_to_dict(review) -> dict:
+    return {
+        "review_date": review.review_date,
+        "timestamp": review.timestamp.isoformat(),
+        "trade_count": review.trade_count,
+        "skip_count": review.skip_count,
+        "resolved_count": review.resolved_count,
+        "win_rate": review.win_rate,
+        "roi_pct": review.roi_pct,
+        "total_pnl": review.total_pnl,
+        "avg_brier_raw": review.avg_brier_raw,
+        "avg_brier_adjusted": review.avg_brier_adjusted,
+        "brier_by_market_type": review.brier_by_market_type,
+        "calibration_drift": review.calibration_drift,
+        "signal_effectiveness": review.signal_effectiveness,
+        "skip_reason_distribution": review.skip_reason_distribution,
+        "top_performing_types": review.top_performing_types,
+        "worst_performing_types": review.worst_performing_types,
+        "llm_insights": review.llm_insights,
+        "llm_recommendations": review.llm_recommendations,
+        "health_status": review.health_status,
+        "experiment_run": review.experiment_run,
+    }
+
+
+@app.get("/reviews")
+async def get_reviews():
+    db: Database = _app_state.get("db")
+    if not db:
+        return {"error": "not initialized"}
+    reviews = await db.get_recent_reviews(days=30)
+    return [_review_to_dict(r) for r in reviews]
+
+
+@app.get("/reviews/{date}")
+async def get_review(date: str):
+    db: Database = _app_state.get("db")
+    if not db:
+        return {"error": "not initialized"}
+    review = await db.get_daily_review(date)
+    if not review:
+        return {"error": "not found"}
+    return _review_to_dict(review)
 
 
 # ---------------------------------------------------------------------------

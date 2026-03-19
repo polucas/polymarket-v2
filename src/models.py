@@ -319,3 +319,32 @@ class Portfolio:
     peak_equity: float = 2000.0
     max_drawdown: float = 0.0
     open_positions: List[Position] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Daily self-check review
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DailyReview:
+    review_date: str
+    timestamp: datetime
+    trade_count: int = 0
+    skip_count: int = 0
+    resolved_count: int = 0
+    win_rate: Optional[float] = None
+    roi_pct: Optional[float] = None
+    total_pnl: float = 0.0
+    avg_brier_raw: Optional[float] = None
+    avg_brier_adjusted: Optional[float] = None
+    brier_by_market_type: dict = field(default_factory=dict)
+    calibration_drift: dict = field(default_factory=dict)
+    signal_effectiveness: dict = field(default_factory=dict)
+    skip_reason_distribution: dict = field(default_factory=dict)
+    top_performing_types: List[str] = field(default_factory=list)
+    worst_performing_types: List[str] = field(default_factory=list)
+    llm_insights: str = ""
+    llm_recommendations: List[str] = field(default_factory=list)
+    health_status: str = "UNKNOWN"
+    experiment_run: str = ""

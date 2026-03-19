@@ -30,6 +30,10 @@ def _build_scheduler() -> Scheduler:
     settings.COOLDOWN_DURATION_HOURS = 2.0
     settings.DAILY_API_BUDGET_USD = 8.0
     settings.MAX_TOTAL_EXPOSURE_PCT = 0.30
+    settings.GROK_MODEL = "grok-4.20-experimental-beta-0304-reasoning"
+    settings.MARKET_COOLDOWN_HOURS = 24.0
+    settings.QUESTION_SIMILARITY_THRESHOLD = 0.60
+    settings.MARKET_FETCH_LIMIT = 200
 
     db = AsyncMock()
     polymarket = AsyncMock()
@@ -101,10 +105,13 @@ class TestGrokFailureSkipRecord:
 
 
 class TestPositionTooSmallSkipRecord:
-    """When Kelly sizing produces position < $1, a SKIP record must be saved."""
+    """When Kelly sizing produces position below the minimum threshold, a SKIP record must be saved.
+    In paper mode the threshold is $0.50; in live mode it is $1.00.
+    """
 
     @pytest.mark.asyncio
     async def test_tiny_position_saves_skip_record(self):
+        """A $0.25 position is below the paper-mode threshold of $0.50 — must be skipped."""
         scheduler = _build_scheduler()
         market = _make_market()
 
@@ -127,7 +134,8 @@ class TestPositionTooSmallSkipRecord:
                 with patch("src.scheduler.adjust_prediction", return_value=(0.505, 0.58, 0.0)):
                     with patch("src.scheduler.calculate_edge", return_value=0.05):
                         with patch("src.scheduler.determine_side", return_value="BUY_YES"):
-                            with patch("src.scheduler.kelly_size", return_value=0.50):
+                            # 0.25 is below the paper-mode threshold of 0.50
+                            with patch("src.scheduler.kelly_size", return_value=0.25):
                                 await scheduler._process_market(
                                     market=market, rss_signals=[], scan_mode="active",
                                     candidates=candidates, all_skips=[],

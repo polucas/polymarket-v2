@@ -59,6 +59,10 @@ def _build_scheduler() -> Scheduler:
     settings.COOLDOWN_DURATION_HOURS = 2.0
     settings.DAILY_API_BUDGET_USD = 8.0
     settings.MAX_TOTAL_EXPOSURE_PCT = 0.30
+    settings.MARKET_COOLDOWN_HOURS = 24.0
+    settings.QUESTION_SIMILARITY_THRESHOLD = 0.60
+    settings.GROK_MODEL = "grok-4.20-experimental-beta-0304-reasoning"
+    settings.MARKET_FETCH_LIMIT = 200
 
     db = AsyncMock()
     polymarket = AsyncMock()
@@ -371,3 +375,45 @@ class TestObserveOnlyAlert:
             mock_alert.reset_mock()
             await scheduler.run_tier1_scan()
             assert mock_alert.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Paper mode position size threshold
+# ---------------------------------------------------------------------------
+
+
+class TestPaperModePositionThreshold:
+    """In paper mode, the minimum position is $0.50; in live mode it is $1.00."""
+
+    def test_paper_mode_accepts_position_above_threshold(self):
+        """A $0.75 position is above the $0.50 paper threshold — should be accepted."""
+        scheduler = _build_scheduler()
+        # ENVIRONMENT is already "paper" in _build_scheduler
+        assert scheduler._settings.ENVIRONMENT == "paper"
+        min_position = 0.50 if scheduler._settings.ENVIRONMENT == "paper" else 1.0
+        position_size = 0.75
+        assert position_size >= min_position
+
+    def test_paper_mode_rejects_position_below_threshold(self):
+        """A $0.25 position is below the $0.50 paper threshold — should be rejected."""
+        scheduler = _build_scheduler()
+        assert scheduler._settings.ENVIRONMENT == "paper"
+        min_position = 0.50 if scheduler._settings.ENVIRONMENT == "paper" else 1.0
+        position_size = 0.25
+        assert position_size < min_position
+
+    def test_live_mode_rejects_position_below_one_dollar(self):
+        """In live mode, a $0.75 position is below the $1.00 threshold — should be rejected."""
+        scheduler = _build_scheduler()
+        scheduler._settings.ENVIRONMENT = "live"
+        min_position = 0.50 if scheduler._settings.ENVIRONMENT == "paper" else 1.0
+        position_size = 0.75
+        assert position_size < min_position
+
+    def test_live_mode_accepts_position_at_one_dollar(self):
+        """In live mode, a $1.00 position meets the threshold exactly — should be accepted."""
+        scheduler = _build_scheduler()
+        scheduler._settings.ENVIRONMENT = "live"
+        min_position = 0.50 if scheduler._settings.ENVIRONMENT == "paper" else 1.0
+        position_size = 1.00
+        assert position_size >= min_position

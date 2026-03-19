@@ -1,6 +1,7 @@
 """Tests for market filter logging."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,7 +15,7 @@ def _make_gamma_market(**overrides):
         "id": "1",
         "question": "Will X happen?",
         "outcomePrices": '["0.55", "0.45"]',
-        "endDate": "2026-02-25T12:00:00Z",
+        "endDate": (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "liquidity": "20000",
         "volume24hr": "5000",
         "clobTokenIds": '["111", "222"]',
@@ -29,12 +30,17 @@ class TestMarketFilterLogging:
     @pytest.mark.asyncio
     async def test_filter_logging_counts(self):
         settings = MagicMock(spec=Settings)
+        settings.MARKET_FETCH_LIMIT = 200
         client = PolymarketClient(settings)
 
+        # Use dynamic dates relative to now
+        within_window = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        too_far_out = (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
         markets_data = [
-            _make_gamma_market(id="1", liquidity="20000", endDate="2026-02-25T12:00:00Z"),  # passes: within window, high liquidity
-            _make_gamma_market(id="2", liquidity="100", endDate="2026-02-25T12:00:00Z"),     # filtered: within window but low liquidity
-            _make_gamma_market(id="3", liquidity="20000", endDate="2030-01-01T12:00:00Z"),   # filtered: too far out (>168h)
+            _make_gamma_market(id="1", liquidity="20000", endDate=within_window),  # passes: within window, high liquidity
+            _make_gamma_market(id="2", liquidity="100", endDate=within_window),     # filtered: within window but low liquidity
+            _make_gamma_market(id="3", liquidity="20000", endDate=too_far_out),   # filtered: too far out (>168h)
         ]
 
         mock_resp = MagicMock()

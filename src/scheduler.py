@@ -104,6 +104,14 @@ class Scheduler:
             max_instances=1,
         )
         self._scheduler.add_job(
+            self._run_daily_self_check,
+            "cron",
+            hour=self._settings.DAILY_SUMMARY_HOUR_UTC,
+            minute=15,
+            id="daily_self_check",
+            max_instances=1,
+        )
+        self._scheduler.add_job(
             self._check_stale_scan,
             "interval",
             minutes=15,
@@ -181,6 +189,8 @@ class Scheduler:
             api_spend = await self._db.get_today_api_spend()
             portfolio = await self._db.load_portfolio()
             open_market_ids = await self._db.get_open_market_ids()
+            recently_traded_ids = await self._db.get_recently_traded_market_ids(self._settings.MARKET_COOLDOWN_HOURS)
+            recent_questions = await self._db.get_recent_market_questions(self._settings.MARKET_COOLDOWN_HOURS)
 
             scan_mode = get_scan_mode(today_trades, self._monk_config)
             if scan_mode == "observe_only" and not self._observe_only_alerted_today:
@@ -230,6 +240,8 @@ class Scheduler:
                         experiment_run=experiment_run,
                         tier=1,
                         open_market_ids=open_market_ids,
+                        recently_traded_ids=recently_traded_ids,
+                        recent_questions=recent_questions,
                     )
                 except Exception as e:
                     log.error("market_processing_error",
@@ -265,6 +277,7 @@ class Scheduler:
                     record = await execute_trade(
                         candidate, portfolio, self._db, self._polymarket,
                         self._settings.ENVIRONMENT, experiment_run,
+                        model_used=self._settings.GROK_MODEL,
                     )
                     if record:
                         today_trades.append(record)
@@ -297,6 +310,8 @@ class Scheduler:
             api_spend = await self._db.get_today_api_spend()
             portfolio = await self._db.load_portfolio()
             open_market_ids = await self._db.get_open_market_ids()
+            recently_traded_ids = await self._db.get_recently_traded_market_ids(self._settings.MARKET_COOLDOWN_HOURS)
+            recent_questions = await self._db.get_recent_market_questions(self._settings.MARKET_COOLDOWN_HOURS)
 
             experiment = await get_current_experiment(self._db)
             experiment_run = experiment.run_id if experiment else "default"
@@ -327,6 +342,8 @@ class Scheduler:
                         experiment_run=experiment_run,
                         tier=2,
                         open_market_ids=open_market_ids,
+                        recently_traded_ids=recently_traded_ids,
+                        recent_questions=recent_questions,
                     )
                 except Exception as e:
                     log.error("tier2_market_error",
@@ -360,6 +377,7 @@ class Scheduler:
                     record = await execute_trade(
                         candidate, portfolio, self._db, self._polymarket,
                         self._settings.ENVIRONMENT, experiment_run,
+                        model_used=self._settings.GROK_MODEL,
                     )
                     if record:
                         today_trades.append(record)
@@ -398,6 +416,8 @@ class Scheduler:
         experiment_run: str,
         tier: int,
         open_market_ids: set = frozenset(),
+        recently_traded_ids: set = frozenset(),
+        recent_questions: list = None,
     ) -> None:
         # Skip if we already have an open position on this market
         if market.market_id in open_market_ids:
@@ -405,6 +425,30 @@ class Scheduler:
             skip_record = self._build_skip_record(market, "already_has_open_position", experiment_run, tier)
             await self._db.save_trade(skip_record)
             return
+
+        # Skip if market was recently traded (cooldown window)
+        if market.market_id in recently_traded_ids:
+            log.info("market_cooldown", market_id=market.market_id)
+            skip_record = self._build_skip_record(market, "market_cooldown", experiment_run, tier)
+            await self._db.save_trade(skip_record)
+            return
+
+        # Skip if a similar question was recently traded (question-similarity dedup)
+        if recent_questions:
+            from src.engine.trade_ranker import keyword_overlap
+            for (recent_mid, recent_question, recent_mtype) in recent_questions:
+                if recent_mid == market.market_id:
+                    continue
+                if recent_mtype != market.market_type:
+                    continue
+                recent_kw = [w.lower() for w in recent_question.split() if len(w) > 3]
+                if keyword_overlap(market.keywords, recent_kw) >= self._settings.QUESTION_SIMILARITY_THRESHOLD:
+                    log.info("similar_market_blocked", market_id=market.market_id, similar_to=recent_mid)
+                    skip_record = self._build_skip_record(
+                        market, f"similar_to_{recent_mid}", experiment_run, tier
+                    )
+                    await self._db.save_trade(skip_record)
+                    return
 
         # Check if market type disabled by learning
         if self._market_type_mgr.should_disable(market.market_type):
@@ -486,7 +530,8 @@ class Scheduler:
             self._settings.MAX_POSITION_PCT,
         )
 
-        if position_size < 1.0:
+        min_position = 0.50 if self._settings.ENVIRONMENT == "paper" else 1.0
+        if position_size < min_position:
             skip_record = self._build_skip_record(
                 market, f"position_too_small_{position_size:.2f}", experiment_run, tier,
                 grok_prob=grok_prob, grok_conf=grok_conf,
@@ -547,7 +592,7 @@ class Scheduler:
             record_id=str(uuid.uuid4()),
             experiment_run=experiment_run,
             timestamp=datetime.now(timezone.utc),
-            model_used="grok-4-1-fast-reasoning",
+            model_used=self._settings.GROK_MODEL,
             market_id=market.market_id,
             market_question=market.question,
             market_type=market.market_type,
@@ -571,7 +616,7 @@ class Scheduler:
             record_id=str(uuid.uuid4()),
             experiment_run=experiment_run,
             timestamp=datetime.now(timezone.utc),
-            model_used="grok-4-1-fast-reasoning",
+            model_used=self._settings.GROK_MODEL,
             market_id=candidate.market.market_id,
             market_question=candidate.market.question,
             market_type=candidate.market.market_type,
@@ -656,3 +701,17 @@ class Scheduler:
                 )
         except Exception as e:
             log.error("stale_check_error", error=str(e))
+
+    async def _run_daily_self_check(self) -> None:
+        """Run daily self-check analysis."""
+        try:
+            from src.learning.self_check import run_daily_self_check, format_self_check_alert
+            review = await run_daily_self_check(
+                self._db, self._grok, self._calibration_mgr,
+                self._market_type_mgr, self._signal_tracker_mgr, self._settings,
+            )
+            await send_alert(format_self_check_alert(review), self._settings)
+            log.info("daily_self_check_complete", review_date=review.review_date)
+        except Exception as e:
+            log.error("daily_self_check_error", error=str(e))
+            await send_alert(format_error_alert(f"Daily self-check failed: {e}"), self._settings)
