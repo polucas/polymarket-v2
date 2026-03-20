@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import aiosqlite
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 MIGRATIONS: dict[int, list[str]] = {
     1: [
@@ -185,6 +185,12 @@ MIGRATIONS: dict[int, list[str]] = {
             health_status TEXT,
             experiment_run TEXT REFERENCES experiment_runs(run_id)
         )""",
+    ],
+    5: [
+        "ALTER TABLE trade_records ADD COLUMN spread_at_decision REAL DEFAULT 0.0",
+        "ALTER TABLE trade_records ADD COLUMN vwap_price REAL DEFAULT 0.0",
+        "ALTER TABLE trade_records ADD COLUMN exit_type TEXT",
+        "ALTER TABLE trade_records ADD COLUMN exit_price REAL",
     ],
 }
 

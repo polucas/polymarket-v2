@@ -65,11 +65,35 @@ class Market:
 
 
 @dataclass
+class OrderBookLevel:
+    price: float
+    size: float
+
+
+@dataclass
 class OrderBook:
     market_id: str
-    bids: List[float] = field(default_factory=list)  # top 5 bid sizes
-    asks: List[float] = field(default_factory=list)  # top 5 ask sizes
+    bids: List[OrderBookLevel] = field(default_factory=list)  # best (highest) first
+    asks: List[OrderBookLevel] = field(default_factory=list)  # best (lowest) first
     timestamp: Optional[datetime] = None
+
+    @property
+    def best_bid(self) -> Optional[float]:
+        return self.bids[0].price if self.bids else None
+
+    @property
+    def best_ask(self) -> Optional[float]:
+        return self.asks[0].price if self.asks else None
+
+    @property
+    def spread(self) -> float:
+        if self.best_ask is not None and self.best_bid is not None:
+            return self.best_ask - self.best_bid
+        return 0.0
+
+    @property
+    def total_depth(self) -> float:
+        return sum(l.size for l in self.bids) + sum(l.size for l in self.asks)
 
 
 @dataclass
@@ -99,6 +123,8 @@ class TradeCandidate:
     calibration_adjustment: float = 0.0
     market_type_adjustment: float = 0.0
     signal_weight_adjustment: float = 0.0
+    spread_at_decision: float = 0.0
+    vwap_price: float = 0.0
 
 
 @dataclass
@@ -168,6 +194,11 @@ class TradeRecord:
     resolved_at: Optional[datetime] = None
     resolution_datetime: Optional[datetime] = None
     unrealized_adverse_move: Optional[float] = None
+
+    spread_at_decision: float = 0.0
+    vwap_price: float = 0.0
+    exit_type: Optional[str] = None
+    exit_price: Optional[float] = None
 
     voided: bool = False
     void_reason: Optional[str] = None

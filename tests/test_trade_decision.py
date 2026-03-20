@@ -9,11 +9,14 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from src.config import MonkModeConfig
-from src.models import Market, Portfolio, Position, TradeCandidate, TradeRecord
+from src.models import Market, OrderBook, OrderBookLevel, Portfolio, Position, TradeCandidate, TradeRecord
 from src.engine.trade_decision import (
     calculate_edge,
+    calculate_spread_adjusted_edge,
+    compute_vwap,
     determine_side,
     kelly_size,
+    kelly_size_vwap,
     check_monk_mode,
     get_scan_mode,
 )
@@ -453,3 +456,134 @@ class TestCheckMonkModeAdditional:
         allowed, reason = check_monk_mode(config, signal, portfolio, today, [], 0.0)
         assert allowed is True
         assert reason is None
+
+
+# ---------------------------------------------------------------------------
+# 10. calculate_spread_adjusted_edge
+# ---------------------------------------------------------------------------
+
+class TestCalculateSpreadAdjustedEdge:
+    def test_buy_yes_uses_ask_price(self):
+        """BUY_YES edge should use best_ask, not market_price."""
+        edge = calculate_spread_adjusted_edge(
+            adjusted_prob=0.70, market_price=0.50, fee_rate=0.0,
+            side="BUY_YES", best_bid=0.48, best_ask=0.55,
+        )
+        # Edge should be 0.70 - 0.55 = 0.15 (not 0.70 - 0.50 = 0.20)
+        assert abs(edge - 0.15) < 1e-9
+
+    def test_buy_no_uses_bid_price(self):
+        """BUY_NO edge should use best_bid."""
+        edge = calculate_spread_adjusted_edge(
+            adjusted_prob=0.30, market_price=0.50, fee_rate=0.0,
+            side="BUY_NO", best_bid=0.45, best_ask=0.55,
+        )
+        # Edge should be |0.30 - 0.45| = 0.15 (not |0.30 - 0.50| = 0.20)
+        assert abs(edge - 0.15) < 1e-9
+
+    def test_fallback_to_market_price_when_no_orderbook(self):
+        """Falls back to market_price when orderbook is empty."""
+        edge = calculate_spread_adjusted_edge(
+            adjusted_prob=0.70, market_price=0.50, fee_rate=0.0,
+            side="BUY_YES", best_bid=None, best_ask=None,
+        )
+        assert abs(edge - 0.20) < 1e-9
+
+    def test_fee_rate_subtracted(self):
+        """Fee rate is subtracted from edge."""
+        edge = calculate_spread_adjusted_edge(
+            adjusted_prob=0.70, market_price=0.50, fee_rate=0.02,
+            side="BUY_YES", best_bid=None, best_ask=None,
+        )
+        assert abs(edge - 0.18) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# 11. compute_vwap
+# ---------------------------------------------------------------------------
+
+class TestComputeVWAP:
+    def test_single_level_full_fill(self):
+        """VWAP equals level price when fully filled at one level."""
+        levels = [OrderBookLevel(price=0.50, size=200)]
+        vwap, filled = compute_vwap(levels, 100)
+        assert abs(vwap - 0.50) < 1e-9
+        assert abs(filled - 100) < 1e-9
+
+    def test_multiple_levels(self):
+        """VWAP walks multiple levels; filled equals requested USD."""
+        levels = [
+            OrderBookLevel(price=0.50, size=100),  # $50 available
+            OrderBookLevel(price=0.55, size=100),  # $55 available
+        ]
+        vwap, filled = compute_vwap(levels, 80)
+        # level 1: $50 at price 0.50; level 2: $30 remaining at price 0.55
+        # total cost = $80, total filled = $80, vwap = 80/80 = 1.0
+        assert filled == 80
+        assert abs(vwap - 1.0) < 1e-9
+
+    def test_partial_fill_insufficient_depth(self):
+        """When orderbook is too thin, only fills what's available."""
+        levels = [OrderBookLevel(price=0.50, size=40)]  # Only $20 available
+        vwap, filled = compute_vwap(levels, 100)
+        assert abs(filled - 20) < 1e-9
+
+    def test_empty_levels(self):
+        """Empty orderbook returns zero."""
+        vwap, filled = compute_vwap([], 100)
+        assert vwap == 0.0
+        assert filled == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 12. kelly_size_vwap
+# ---------------------------------------------------------------------------
+
+class TestKellySizeVWAP:
+    def _make_orderbook(self, ask_levels=None, bid_levels=None):
+        return OrderBook(
+            market_id="test",
+            bids=[OrderBookLevel(p, s) for p, s in (bid_levels or [])],
+            asks=[OrderBookLevel(p, s) for p, s in (ask_levels or [])],
+        )
+
+    def test_deep_book_returns_full_kelly(self):
+        """Deep orderbook returns full Kelly size."""
+        ob = self._make_orderbook(ask_levels=[(0.50, 10000)])
+        size, vwap = kelly_size_vwap(
+            adjusted_prob=0.70, market_price=0.50, side="BUY_YES",
+            bankroll=10000, orderbook=ob,
+            kelly_fraction=0.25, max_position_pct=0.016, fee_rate=0.0,
+        )
+        assert size > 0
+
+    def test_thin_book_caps_size(self):
+        """Thin orderbook caps position at available depth."""
+        ob = self._make_orderbook(ask_levels=[(0.50, 10)])  # Only $5 available
+        size, vwap = kelly_size_vwap(
+            adjusted_prob=0.70, market_price=0.50, side="BUY_YES",
+            bankroll=10000, orderbook=ob,
+            kelly_fraction=0.25, max_position_pct=0.016, fee_rate=0.0,
+        )
+        assert size <= 5.0  # Can't exceed available depth
+
+    def test_empty_orderbook_falls_back(self):
+        """Empty orderbook falls back to standard Kelly."""
+        ob = self._make_orderbook()
+        size, vwap = kelly_size_vwap(
+            adjusted_prob=0.70, market_price=0.50, side="BUY_YES",
+            bankroll=10000, orderbook=ob,
+            kelly_fraction=0.25, max_position_pct=0.016, fee_rate=0.0,
+        )
+        # Should fall back to standard kelly_size behavior
+        assert size > 0  # kelly_size returns > 0 for this edge
+        assert vwap == 0.50  # market_price as fallback
+
+    def test_no_edge_returns_zero(self):
+        """When probability <= market_price for BUY_YES, returns 0."""
+        ob = self._make_orderbook(ask_levels=[(0.50, 10000)])
+        size, vwap = kelly_size_vwap(
+            adjusted_prob=0.40, market_price=0.50, side="BUY_YES",
+            bankroll=10000, orderbook=ob,
+        )
+        assert size == 0.0

@@ -75,8 +75,8 @@ def build_grok_context(
     )[:7]
 
     # Orderbook depth and skew
-    total_bids = sum(orderbook.bids) if orderbook.bids else 0
-    total_asks = sum(orderbook.asks) if orderbook.asks else 0
+    total_bids = sum(l.size for l in orderbook.bids) if orderbook.bids else 0
+    total_asks = sum(l.size for l in orderbook.asks) if orderbook.asks else 0
     ob_depth = total_bids + total_asks
     ob_skew = (total_bids - total_asks) / max(ob_depth, 1) if ob_depth > 0 else 0
 
@@ -89,6 +89,8 @@ def build_grok_context(
 
     signals_text = "\n".join(signal_lines) if signal_lines else "  No signals available."
 
+    spread_line = (f"\nSpread: {orderbook.spread:.4f}" if orderbook.spread > 0 else "")
+
     context = f"""MARKET ANALYSIS REQUEST
 
 Market Question: {market.question}
@@ -97,7 +99,7 @@ Current NO price: {market.no_price:.4f}
 Resolution: {market.hours_to_resolution:.1f} hours
 Volume (24h): ${market.volume_24h:,.0f}
 Liquidity: ${market.liquidity:,.0f}
-Orderbook depth: ${ob_depth:,.0f} (skew: {ob_skew:+.2f})
+Orderbook depth: ${ob_depth:,.0f} (skew: {ob_skew:+.2f}){spread_line}
 
 SIGNALS:
 {signals_text}

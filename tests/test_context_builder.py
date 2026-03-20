@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.models import Market, Signal, OrderBook
+from src.models import Market, Signal, OrderBook, OrderBookLevel
 from src.pipelines.context_builder import (
     extract_keywords,
     build_grok_context,
@@ -68,10 +68,23 @@ def _make_orderbook(
     bids: list | None = None,
     asks: list | None = None,
 ) -> OrderBook:
+    """Build an OrderBook from lists of sizes (for backward compat) or OrderBookLevel objects."""
+    def _to_levels(values: list, is_bids: bool) -> list:
+        if not values:
+            return []
+        if isinstance(values[0], OrderBookLevel):
+            return values
+        # plain float sizes — assign placeholder prices
+        price_start = 0.50
+        step = -0.01 if is_bids else 0.01
+        return [OrderBookLevel(price=price_start + i * step, size=v) for i, v in enumerate(values)]
+
+    raw_bids = bids if bids is not None else [100.0, 80.0, 60.0]
+    raw_asks = asks if asks is not None else [90.0, 70.0, 50.0]
     return OrderBook(
         market_id=market_id,
-        bids=bids if bids is not None else [100.0, 80.0, 60.0],
-        asks=asks if asks is not None else [90.0, 70.0, 50.0],
+        bids=_to_levels(raw_bids, is_bids=True),
+        asks=_to_levels(raw_asks, is_bids=False),
         timestamp=datetime.now(timezone.utc),
     )
 

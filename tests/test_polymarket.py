@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from src.config import Settings
-from src.models import Market, OrderBook
+from src.models import Market, OrderBook, OrderBookLevel
 from src.pipelines.polymarket import PolymarketClient, MARKET_TYPE_KEYWORDS
 
 
@@ -286,8 +286,20 @@ class TestGetOrderbook:
 
         assert isinstance(ob, OrderBook)
         assert ob.market_id == "market-abc"
-        assert ob.bids == [100.0, 200.0, 150.0]
-        assert ob.asks == [80.0, 120.0]
+        assert len(ob.bids) == 3
+        assert all(isinstance(b, OrderBookLevel) for b in ob.bids)
+        assert ob.bids[0].price == pytest.approx(0.60)
+        assert ob.bids[0].size == pytest.approx(100.0)
+        assert ob.bids[1].price == pytest.approx(0.59)
+        assert ob.bids[1].size == pytest.approx(200.0)
+        assert ob.bids[2].price == pytest.approx(0.58)
+        assert ob.bids[2].size == pytest.approx(150.0)
+        assert len(ob.asks) == 2
+        assert all(isinstance(a, OrderBookLevel) for a in ob.asks)
+        assert ob.asks[0].price == pytest.approx(0.62)
+        assert ob.asks[0].size == pytest.approx(80.0)
+        assert ob.asks[1].price == pytest.approx(0.63)
+        assert ob.asks[1].size == pytest.approx(120.0)
         assert ob.timestamp is not None
 
 

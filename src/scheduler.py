@@ -23,10 +23,12 @@ from src.engine.grok_client import GrokClient
 from src.engine.resolution import auto_resolve_trades, update_unrealized_adverse_moves
 from src.engine.trade_decision import (
     calculate_edge,
+    calculate_spread_adjusted_edge,
     check_monk_mode,
     determine_side,
     get_scan_mode,
     kelly_size,
+    kelly_size_vwap,
 )
 from src.engine.trade_ranker import select_best_trades
 from src.learning.adjustment import adjust_prediction, on_trade_resolved
@@ -506,8 +508,11 @@ class Scheduler:
 
         # Calculate edge and side
         fee_rate = self._settings.TIER1_FEE_RATE if tier == 1 else self._settings.TIER2_FEE_RATE
-        edge = calculate_edge(adj_prob, market.yes_price, fee_rate) - extra_edge
         side = determine_side(adj_prob, market.yes_price)
+        edge = calculate_spread_adjusted_edge(
+            adj_prob, market.yes_price, fee_rate, side,
+            best_bid=orderbook.best_bid, best_ask=orderbook.best_ask,
+        ) - extra_edge
 
         min_edge = self._settings.TIER1_MIN_EDGE if tier == 1 else self._settings.TIER2_MIN_EDGE
 
@@ -523,11 +528,15 @@ class Scheduler:
             return
 
         # Kelly sizing
-        position_size = kelly_size(
+        min_edge_for_vwap = self._settings.TIER1_MIN_EDGE if tier == 1 else self._settings.TIER2_MIN_EDGE
+        position_size, vwap_price = kelly_size_vwap(
             adj_prob, market.yes_price, side,
             (await self._db.load_portfolio()).total_equity,
+            orderbook,
             self._settings.KELLY_FRACTION,
             self._settings.MAX_POSITION_PCT,
+            fee_rate,
+            min_edge=min_edge_for_vwap,
         )
 
         min_position = 0.50 if self._settings.ENVIRONMENT == "paper" else 1.0
@@ -544,7 +553,7 @@ class Scheduler:
         # Detect headline-only
         headline_only = all(s.headline_only for s in (twitter_signals + relevant_rss)) if (twitter_signals or relevant_rss) else False
 
-        ob_depth = sum(orderbook.bids) + sum(orderbook.asks)
+        ob_depth = orderbook.total_depth
 
         candidate = TradeCandidate(
             market=market,
@@ -568,6 +577,8 @@ class Scheduler:
             calibration_adjustment=adj_conf - grok_conf,
             market_type_adjustment=extra_edge,
             signal_weight_adjustment=0.0,
+            spread_at_decision=orderbook.spread,
+            vwap_price=vwap_price,
         )
         candidates.append(candidate)
 

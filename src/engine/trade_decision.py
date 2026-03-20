@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import structlog
 
 from src.config import MonkModeConfig
 from src.models import Portfolio, TradeCandidate, TradeRecord
+
+if TYPE_CHECKING:
+    from src.models import OrderBook, OrderBookLevel
 
 log = structlog.get_logger()
 
@@ -13,6 +16,118 @@ log = structlog.get_logger()
 def calculate_edge(adjusted_prob: float, market_price: float, fee_rate: float) -> float:
     """Calculate edge: abs(adjusted_prob - market_price) - fee_rate"""
     return abs(adjusted_prob - market_price) - fee_rate
+
+
+def calculate_spread_adjusted_edge(
+    adjusted_prob: float,
+    market_price: float,
+    fee_rate: float,
+    side: str,
+    best_bid: Optional[float] = None,
+    best_ask: Optional[float] = None,
+) -> float:
+    """Edge using executable orderbook prices instead of midpoint.
+    BUY_YES: edge vs best_ask (what you'd actually pay).
+    BUY_NO: edge vs best_bid (determines NO price you'd pay).
+    Falls back to market_price if orderbook is empty.
+    """
+    if side == "BUY_YES" and best_ask is not None:
+        effective_price = best_ask
+    elif side == "BUY_NO" and best_bid is not None:
+        effective_price = best_bid
+    else:
+        effective_price = market_price
+    return abs(adjusted_prob - effective_price) - fee_rate
+
+
+def compute_vwap(
+    levels: List[OrderBookLevel],
+    target_size_usd: float,
+) -> Tuple[float, float]:
+    """Walk the orderbook levels, compute VWAP up to target_size_usd.
+
+    For asks: levels should be sorted lowest-price first.
+    For bids: levels should be sorted highest-price first.
+
+    Returns (vwap_price, fillable_size_usd).
+    """
+    if not levels or target_size_usd <= 0:
+        return 0.0, 0.0
+
+    filled = 0.0
+    cost = 0.0
+    for level in levels:
+        level_usd = level.size * level.price
+        remaining = target_size_usd - filled
+        if remaining <= 0:
+            break
+        take = min(level_usd, remaining)
+        cost += take
+        filled += take
+
+    vwap = cost / filled if filled > 0 else 0.0
+    return vwap, filled
+
+
+def kelly_size_vwap(
+    adjusted_prob: float,
+    market_price: float,
+    side: str,
+    bankroll: float,
+    orderbook: OrderBook,
+    kelly_fraction: float = 0.25,
+    max_position_pct: float = 0.08,
+    fee_rate: float = 0.0,
+    min_edge: float = 0.0,
+) -> Tuple[float, float]:
+    """Kelly size capped by profitable orderbook depth.
+
+    Returns (position_size_usd, vwap_price).
+    Falls back to standard kelly_size if orderbook is empty.
+    """
+    # 1. Base Kelly size
+    base_size = kelly_size(adjusted_prob, market_price, side, bankroll,
+                           kelly_fraction, max_position_pct)
+    if base_size == 0:
+        return 0.0, market_price
+
+    # 2. Get relevant orderbook side
+    levels = orderbook.asks if side == "BUY_YES" else orderbook.bids
+    if not levels:
+        return base_size, market_price
+
+    # 3. Compute VWAP at base_size
+    vwap, fillable = compute_vwap(levels, base_size)
+    if fillable == 0:
+        return 0.0, market_price
+
+    # 4. Check if VWAP still gives enough edge
+    edge_at_vwap = abs(adjusted_prob - vwap) - fee_rate
+    if edge_at_vwap >= min_edge:
+        # Full size is profitable at VWAP
+        final_size = min(base_size, fillable)
+        final_vwap, _ = compute_vwap(levels, final_size)
+        return final_size, final_vwap
+
+    # 5. Binary search for max profitable size
+    lo, hi = 0.0, base_size
+    for _ in range(15):  # converges quickly
+        mid = (lo + hi) / 2
+        v, f = compute_vwap(levels, mid)
+        if f == 0:
+            hi = mid
+            continue
+        e = abs(adjusted_prob - v) - fee_rate
+        if e >= min_edge:
+            lo = mid
+        else:
+            hi = mid
+
+    final_size = min(lo, fillable)
+    if final_size <= 0:
+        return 0.0, market_price
+    final_vwap, _ = compute_vwap(levels, final_size)
+    return final_size, final_vwap
 
 
 def determine_side(adjusted_prob: float, market_price: float) -> str:

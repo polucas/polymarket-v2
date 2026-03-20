@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import datetime, timezone
 
 from src.config import Settings
-from src.models import Market, OrderBook
+from src.models import Market, OrderBook, OrderBookLevel
 
 log = structlog.get_logger()
 
@@ -170,8 +170,10 @@ class PolymarketClient:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                bids = [float(b.get("size", 0)) for b in (data.get("bids", []))[:5]]
-                asks = [float(a.get("size", 0)) for a in (data.get("asks", []))[:5]]
+                bids = [OrderBookLevel(price=float(b.get("price", 0)), size=float(b.get("size", 0)))
+                        for b in (data.get("bids", []))[:5]]
+                asks = [OrderBookLevel(price=float(a.get("price", 0)), size=float(a.get("size", 0)))
+                        for a in (data.get("asks", []))[:5]]
                 return OrderBook(market_id=market_id, bids=bids, asks=asks, timestamp=datetime.now(timezone.utc))
         except Exception as e:
             log.warning("orderbook_fetch_failed", market_id=market_id, error=str(e))
