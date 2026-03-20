@@ -1,8 +1,8 @@
 """Tests for the RSS data pipeline (RSSPipeline).
 
 Covers signal generation, deduplication across calls, headline age filtering,
-source tier classification by feed domain, parse error handling, and per-feed
-entry limits.
+source tier classification by feed domain, parse error handling, per-feed
+entry limits, and the signal accumulator (poll_and_accumulate / consume_signals).
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import List
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -593,3 +593,81 @@ class TestEmptyFeedEntries:
                 signals = await pipeline.get_breaking_news()
 
         assert len(signals) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Signal accumulator (poll_and_accumulate / consume_signals)
+# ---------------------------------------------------------------------------
+
+
+def _make_signal_simple(content: str, minutes_ago: int = 0) -> Signal:
+    ts = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    return Signal(
+        source="rss", source_tier="S2", info_type=None,
+        content=content, credibility=0.7, author="test",
+        followers=0, engagement=0, timestamp=ts, headline_only=True,
+    )
+
+
+@pytest.fixture
+def rss_pipeline_clean():
+    """Create RSSPipeline with mocked feed config (no real file I/O)."""
+    with patch("src.pipelines.rss._load_feed_config", return_value={}):
+        pipeline = RSSPipeline()
+    return pipeline
+
+
+class TestSignalAccumulator:
+    @pytest.mark.asyncio
+    async def test_poll_and_accumulate_stores_signals(self, rss_pipeline_clean):
+        """Signals from poll_and_accumulate are stored in cache."""
+        signals = [_make_signal_simple("Breaking: Test event")]
+        with patch.object(rss_pipeline_clean, "get_breaking_news", new_callable=AsyncMock, return_value=signals):
+            await rss_pipeline_clean.poll_and_accumulate()
+        assert len(rss_pipeline_clean._cached_signals) == 1
+        assert rss_pipeline_clean._cached_signals[0].content == "Breaking: Test event"
+
+    @pytest.mark.asyncio
+    async def test_consume_signals_returns_and_clears(self, rss_pipeline_clean):
+        """consume_signals returns cached signals and clears the cache."""
+        rss_pipeline_clean._cached_signals = [_make_signal_simple("Signal 1"), _make_signal_simple("Signal 2")]
+        result = rss_pipeline_clean.consume_signals()
+        assert len(result) == 2
+        assert len(rss_pipeline_clean._cached_signals) == 0
+
+    @pytest.mark.asyncio
+    async def test_consume_signals_empty_cache(self, rss_pipeline_clean):
+        """consume_signals returns empty list when cache is empty."""
+        result = rss_pipeline_clean.consume_signals()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_no_duplicates_across_polls(self, rss_pipeline_clean):
+        """Same signal across multiple polls is not duplicated in cache."""
+        signal = _make_signal_simple("Breaking: Same event")
+        with patch.object(rss_pipeline_clean, "get_breaking_news", new_callable=AsyncMock, return_value=[signal]):
+            await rss_pipeline_clean.poll_and_accumulate()
+            await rss_pipeline_clean.poll_and_accumulate()
+        assert len(rss_pipeline_clean._cached_signals) == 1
+
+    @pytest.mark.asyncio
+    async def test_prune_old_signals(self, rss_pipeline_clean):
+        """Signals older than 2 hours are pruned from cache."""
+        old_signal = _make_signal_simple("Old news", minutes_ago=130)
+        fresh_signal = _make_signal_simple("Fresh news", minutes_ago=5)
+        rss_pipeline_clean._cached_signals = [old_signal, fresh_signal]
+        with patch.object(rss_pipeline_clean, "get_breaking_news", new_callable=AsyncMock, return_value=[]):
+            await rss_pipeline_clean.poll_and_accumulate()
+        assert len(rss_pipeline_clean._cached_signals) == 1
+        assert rss_pipeline_clean._cached_signals[0].content == "Fresh news"
+
+    @pytest.mark.asyncio
+    async def test_accumulate_multiple_polls(self, rss_pipeline_clean):
+        """Signals from multiple polls are accumulated."""
+        s1 = _make_signal_simple("Event 1")
+        s2 = _make_signal_simple("Event 2")
+        with patch.object(rss_pipeline_clean, "get_breaking_news", new_callable=AsyncMock, return_value=[s1]):
+            await rss_pipeline_clean.poll_and_accumulate()
+        with patch.object(rss_pipeline_clean, "get_breaking_news", new_callable=AsyncMock, return_value=[s2]):
+            await rss_pipeline_clean.poll_and_accumulate()
+        assert len(rss_pipeline_clean._cached_signals) == 2

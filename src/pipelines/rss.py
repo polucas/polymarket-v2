@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
@@ -47,12 +48,34 @@ class RSSPipeline:
     def __init__(self):
         self.seen_headlines: Dict[str, datetime] = {}
         self._feeds = _load_feed_config()
+        self._cached_signals: List[Signal] = []
+        self._lock = asyncio.Lock()
 
     def _prune_old_headlines(self) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         self.seen_headlines = {
             h: ts for h, ts in self.seen_headlines.items() if ts > cutoff
         }
+
+    async def poll_and_accumulate(self) -> None:
+        """Poll RSS feeds and accumulate new signals for later consumption."""
+        async with self._lock:
+            new_signals = await self.get_breaking_news()
+            # get_breaking_news already deduplicates via seen_headlines
+            # Only add signals not already in cache (by content)
+            cached_contents = {s.content for s in self._cached_signals}
+            for sig in new_signals:
+                if sig.content not in cached_contents:
+                    self._cached_signals.append(sig)
+            # Prune signals older than 2 hours
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+            self._cached_signals = [s for s in self._cached_signals if s.timestamp > cutoff]
+
+    def consume_signals(self) -> List[Signal]:
+        """Return accumulated signals and clear the cache. Called by Tier 1 scan."""
+        signals = self._cached_signals.copy()
+        self._cached_signals.clear()
+        return signals
 
     async def get_breaking_news(self) -> List[Signal]:
         self._prune_old_headlines()

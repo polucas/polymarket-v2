@@ -120,9 +120,17 @@ class Scheduler:
             id="stale_check",
             max_instances=1,
         )
+        self._scheduler.add_job(
+            self._poll_rss,
+            "interval",
+            seconds=self._settings.RSS_POLL_INTERVAL_SECONDS,
+            id="rss_poll",
+            max_instances=1,
+        )
         self._scheduler.start()
         log.info("scheduler_started",
-                 tier1_interval=self._settings.TIER1_SCAN_INTERVAL_MINUTES)
+                 tier1_interval=self._settings.TIER1_SCAN_INTERVAL_MINUTES,
+                 rss_poll_interval=self._settings.RSS_POLL_INTERVAL_SECONDS)
 
     def stop(self) -> None:
         self._scheduler.shutdown(wait=False)
@@ -151,6 +159,13 @@ class Scheduler:
         except Exception as e:
             log.error("adverse_update_error", error=str(e))
             await send_alert(format_error_alert(f"Adverse move update failed: {e}"), self._settings)
+
+    async def _poll_rss(self) -> None:
+        """Independent RSS polling job — accumulates signals between scan cycles."""
+        try:
+            await self._rss.poll_and_accumulate()
+        except Exception as e:
+            log.warning("rss_poll_error", error=str(e))
 
     # ------------------------------------------------------------------
     # Tier 2 activation
@@ -219,8 +234,8 @@ class Scheduler:
                 self.last_scan_completed = datetime.now(timezone.utc)
                 return
 
-            # Collect all signals from RSS for breaking news
-            rss_signals = await self._rss.get_breaking_news()
+            # Collect all signals from RSS for breaking news (accumulated by _poll_rss)
+            rss_signals = self._rss.consume_signals()
 
             # Check Tier 2 activation
             if self.should_activate_tier2(rss_signals) and not self._tier2_active:

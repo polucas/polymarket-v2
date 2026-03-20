@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     GROK_MODEL: str = "grok-4.20-experimental-beta-0304-reasoning"
 
+    # RSS Polling
+    RSS_POLL_INTERVAL_SECONDS: int = 30
+
     # Tier 1 Config
     TIER1_SCAN_INTERVAL_MINUTES: int = 15
     TIER1_MIN_EDGE: float = 0.03

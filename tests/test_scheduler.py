@@ -63,6 +63,7 @@ def _build_scheduler() -> Scheduler:
     settings.QUESTION_SIMILARITY_THRESHOLD = 0.60
     settings.GROK_MODEL = "grok-4.20-experimental-beta-0304-reasoning"
     settings.MARKET_FETCH_LIMIT = 200
+    settings.RSS_POLL_INTERVAL_SECONDS = 30
 
     db = AsyncMock()
     polymarket = AsyncMock()
@@ -356,7 +357,7 @@ class TestObserveOnlyAlert:
 
         # Mock away everything else in run_tier1_scan that we don't care about
         scheduler._polymarket.get_active_markets.return_value = []
-        scheduler._rss.get_breaking_news.return_value = []
+        scheduler._rss.consume_signals.return_value = []
 
         with patch(
             "src.scheduler.get_scan_mode", return_value="observe_only"
