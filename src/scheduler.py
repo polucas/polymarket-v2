@@ -20,7 +20,7 @@ from src.config import MonkModeConfig, Settings
 from src.db.sqlite import Database
 from src.engine.execution import execute_trade
 from src.engine.grok_client import GrokClient
-from src.engine.resolution import auto_resolve_trades, update_unrealized_adverse_moves
+from src.engine.resolution import auto_resolve_trades, check_early_exits, update_unrealized_adverse_moves
 from src.engine.trade_decision import (
     calculate_edge,
     calculate_spread_adjusted_edge,
@@ -142,6 +142,7 @@ class Scheduler:
 
     async def _auto_resolve(self) -> None:
         try:
+            await check_early_exits(self._db, self._polymarket, self._settings)
             await auto_resolve_trades(self._db, self._polymarket)
             # After resolution, trigger learning updates for newly resolved trades
             resolved = await self._db.get_all_resolved_trades()
@@ -594,6 +595,7 @@ class Scheduler:
             signal_weight_adjustment=0.0,
             spread_at_decision=orderbook.spread,
             vwap_price=vwap_price,
+            execution_type=self._settings.TIER1_EXECUTION_TYPE if tier == 1 else self._settings.TIER2_EXECUTION_TYPE,
         )
         candidates.append(candidate)
 

@@ -125,6 +125,7 @@ class TradeCandidate:
     signal_weight_adjustment: float = 0.0
     spread_at_decision: float = 0.0
     vwap_price: float = 0.0
+    execution_type: str = "maker"
 
 
 @dataclass

@@ -249,6 +249,7 @@ def _make_candidate(**overrides) -> TradeCandidate:
         "grok_raw_confidence": 0.80,
         "grok_reasoning": "test reasoning",
         "grok_signal_types": [],
+        "execution_type": "maker",
     }
     defaults.update(overrides)
     return TradeCandidate(**defaults)
@@ -266,15 +267,17 @@ class TestExecuteTradePaper:
         mock_db = AsyncMock()
         mock_client = AsyncMock()
 
-        record = await execute_trade(
-            candidate=candidate,
-            portfolio=portfolio,
-            db=mock_db,
-            polymarket_client=mock_client,
-            environment="paper",
-            experiment_run="test-run",
-            model_used="grok-3-fast",
-        )
+        # Force fill: random() = 0.0 < any fill_probability
+        with patch("src.engine.execution.random.random", return_value=0.0):
+            record = await execute_trade(
+                candidate=candidate,
+                portfolio=portfolio,
+                db=mock_db,
+                polymarket_client=mock_client,
+                environment="paper",
+                experiment_run="test-run",
+                model_used="grok-3-fast",
+            )
 
         assert record is not None
         assert isinstance(record, TradeRecord)
@@ -357,14 +360,16 @@ class TestExecuteTradePortfolioUpdate:
         mock_db = AsyncMock()
         mock_client = AsyncMock()
 
-        record = await execute_trade(
-            candidate=candidate,
-            portfolio=portfolio,
-            db=mock_db,
-            polymarket_client=mock_client,
-            environment="paper",
-            experiment_run="test-run",
-        )
+        # Force fill: random() = 0.0 < any fill_probability
+        with patch("src.engine.execution.random.random", return_value=0.0):
+            record = await execute_trade(
+                candidate=candidate,
+                portfolio=portfolio,
+                db=mock_db,
+                polymarket_client=mock_client,
+                environment="paper",
+                experiment_run="test-run",
+            )
 
         assert record is not None
         # Cash should be decreased by position_size

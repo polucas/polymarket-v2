@@ -114,3 +114,15 @@ def format_stale_scan_alert(minutes_since: float) -> str:
         f"<b>STALE SCAN WARNING</b>\n"
         f"No scan completed in {minutes_since:.0f} minutes. Check bot health."
     )
+
+
+def format_early_exit_alert(record) -> str:
+    """Format early exit alert for Telegram."""
+    label = "TAKE-PROFIT" if record.exit_type == "take_profit" else "STOP-LOSS"
+    roi = record.pnl / record.position_size_usd if record.position_size_usd > 0 else 0
+    return (
+        f"<b>{label}: {record.market_question[:80]}</b>\n"
+        f"Exit Price: {record.exit_price:.4f} | Entry: {record.market_price_at_decision:.4f}\n"
+        f"PnL: ${record.pnl:+.2f} | Size: ${record.position_size_usd:.2f}\n"
+        f"ROI: {roi:.1%}"
+    )

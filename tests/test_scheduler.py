@@ -64,6 +64,11 @@ def _build_scheduler() -> Scheduler:
     settings.GROK_MODEL = "grok-4.20-experimental-beta-0304-reasoning"
     settings.MARKET_FETCH_LIMIT = 200
     settings.RSS_POLL_INTERVAL_SECONDS = 30
+    settings.TIER1_EXECUTION_TYPE = "maker"
+    settings.TIER2_EXECUTION_TYPE = "maker"
+    settings.TAKE_PROFIT_ROI = 0.20
+    settings.STOP_LOSS_ROI = -0.15
+    settings.EARLY_EXIT_ENABLED = True
 
     db = AsyncMock()
     polymarket = AsyncMock()

@@ -144,7 +144,7 @@ class Database:
 
     async def get_open_trades(self) -> List[TradeRecord]:
         cursor = await self._conn.execute(
-            "SELECT * FROM trade_records WHERE actual_outcome IS NULL AND voided = FALSE AND action != 'SKIP'"
+            "SELECT * FROM trade_records WHERE actual_outcome IS NULL AND voided = FALSE AND action != 'SKIP' AND exit_type IS NULL"
         )
         rows = await cursor.fetchall()
         return [self._row_to_trade(r) for r in rows]
@@ -171,11 +171,13 @@ class Database:
         await self._conn.execute(
             """UPDATE trade_records SET
                 actual_outcome=?, pnl=?, brier_score_raw=?, brier_score_adjusted=?,
-                resolved_at=?, unrealized_adverse_move=?, voided=?, void_reason=?
+                resolved_at=?, unrealized_adverse_move=?, voided=?, void_reason=?,
+                exit_type=?, exit_price=?
             WHERE record_id=?""",
             (
                 r.actual_outcome, r.pnl, r.brier_score_raw, r.brier_score_adjusted,
                 _iso(r.resolved_at), r.unrealized_adverse_move, r.voided, r.void_reason,
+                r.exit_type, r.exit_price,
                 r.record_id,
             ),
         )
@@ -192,16 +194,16 @@ class Database:
 
     async def count_open_trades(self) -> int:
         cursor = await self._conn.execute(
-            "SELECT COUNT(*) FROM trade_records WHERE actual_outcome IS NULL AND voided = FALSE AND action != 'SKIP'"
+            "SELECT COUNT(*) FROM trade_records WHERE actual_outcome IS NULL AND voided = FALSE AND action != 'SKIP' AND exit_type IS NULL"
         )
         row = await cursor.fetchone()
         return row[0] if row else 0
 
     async def get_open_market_ids(self) -> set:
-        """Return set of market_ids that have open (unresolved, non-voided, non-SKIP) trades."""
+        """Return set of market_ids that have open (unresolved, non-voided, non-SKIP, non-early-exited) trades."""
         cursor = await self._conn.execute(
             "SELECT DISTINCT market_id FROM trade_records "
-            "WHERE actual_outcome IS NULL AND voided = FALSE AND action != 'SKIP'"
+            "WHERE actual_outcome IS NULL AND voided = FALSE AND action != 'SKIP' AND exit_type IS NULL"
         )
         rows = await cursor.fetchall()
         return {r[0] for r in rows}

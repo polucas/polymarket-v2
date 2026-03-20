@@ -32,12 +32,19 @@ class Settings(BaseSettings):
     TIER1_DAILY_CAP: int = 20
     TIER1_FEE_RATE: float = 0.0
     MARKET_FETCH_LIMIT: int = 200
+    TIER1_EXECUTION_TYPE: str = "maker"
 
     # Tier 2 Config
     TIER2_SCAN_INTERVAL_MINUTES: int = 3
     TIER2_MIN_EDGE: float = 0.05
     TIER2_DAILY_CAP: int = 3
     TIER2_FEE_RATE: float = 0.04
+    TIER2_EXECUTION_TYPE: str = "maker"
+
+    # Early Exit
+    TAKE_PROFIT_ROI: float = 0.20
+    STOP_LOSS_ROI: float = -0.15
+    EARLY_EXIT_ENABLED: bool = True
 
     # Monk Mode
     DAILY_LOSS_LIMIT_PCT: float = 0.05

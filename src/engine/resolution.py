@@ -115,6 +115,113 @@ async def auto_resolve_trades(db: Database, polymarket_client) -> None:
         log.info("resolution_cycle_complete", resolved=resolved_count)
 
 
+def calculate_early_exit_pnl(record: TradeRecord, exit_price: float) -> float:
+    """Calculate PnL when exiting at current market price (not binary resolution).
+
+    BUY_YES: Bought YES shares at entry_price. Each dollar buys 1/entry_price shares.
+             Selling at exit_price: PnL = position * (exit_price/entry_price - 1)
+    BUY_NO:  Bought NO shares at (1-entry_price). Each dollar buys 1/(1-entry_price) shares.
+             NO share value at exit = (1-exit_price).
+             PnL = position * ((1-exit_price)/(1-entry_price) - 1)
+    """
+    entry = record.market_price_at_decision
+    size = record.position_size_usd
+
+    if record.action == "BUY_YES":
+        if entry <= 0:
+            return 0.0
+        return size * (exit_price / entry - 1.0)
+    elif record.action == "BUY_NO":
+        if entry >= 1.0:
+            return 0.0
+        return size * ((1.0 - exit_price) / (1.0 - entry) - 1.0)
+    return 0.0
+
+
+def calculate_unrealized_roi(record: TradeRecord, current_price: float) -> float:
+    """Calculate unrealized ROI for stop-loss/take-profit check."""
+    if record.position_size_usd == 0:
+        return 0.0
+    pnl = calculate_early_exit_pnl(record, current_price)
+    return pnl / record.position_size_usd
+
+
+async def check_early_exits(
+    db: Database,
+    polymarket_client,
+    settings,
+) -> None:
+    """Check open trades for stop-loss/take-profit triggers.
+
+    Runs before auto_resolve in the resolution cycle.
+    Early-exited trades get PnL but no actual_outcome (Brier stays NULL).
+    """
+    if not settings.EARLY_EXIT_ENABLED:
+        return
+
+    open_trades = await db.get_open_trades()
+    if not open_trades:
+        return
+
+    portfolio = await db.load_portfolio()
+
+    for trade in open_trades:
+        try:
+            market = await polymarket_client.get_market(trade.market_id)
+            if market is None or market.resolved:
+                continue  # Let normal resolution handle resolved markets
+
+            current_price = market.yes_price
+            roi = calculate_unrealized_roi(trade, current_price)
+
+            exit_type = None
+            if roi >= settings.TAKE_PROFIT_ROI:
+                exit_type = "take_profit"
+            elif roi <= settings.STOP_LOSS_ROI:
+                exit_type = "stop_loss"
+
+            if exit_type is None:
+                continue
+
+            pnl = calculate_early_exit_pnl(trade, current_price)
+
+            # Update trade record
+            trade.exit_type = exit_type
+            trade.exit_price = current_price
+            trade.pnl = pnl
+            trade.resolved_at = datetime.now(timezone.utc)
+            # Do NOT set actual_outcome — the event hasn't resolved yet
+
+            await db.update_trade(trade)
+
+            # Update portfolio
+            portfolio.total_pnl += pnl
+            portfolio.cash_balance += trade.position_size_usd + pnl
+            portfolio.open_positions = [
+                p for p in portfolio.open_positions if p.market_id != trade.market_id
+            ]
+            portfolio.total_equity = portfolio.cash_balance + sum(
+                p.current_value for p in portfolio.open_positions
+            )
+            if portfolio.total_equity > portfolio.peak_equity:
+                portfolio.peak_equity = portfolio.total_equity
+            drawdown = (portfolio.peak_equity - portfolio.total_equity) / portfolio.peak_equity if portfolio.peak_equity > 0 else 0
+            portfolio.max_drawdown = max(portfolio.max_drawdown, drawdown)
+            await db.save_portfolio(portfolio)
+
+            log.info("early_exit_triggered",
+                     market_id=trade.market_id,
+                     exit_type=exit_type,
+                     roi=f"{roi:.4f}",
+                     pnl=f"{pnl:.2f}",
+                     exit_price=current_price,
+                     entry_price=trade.market_price_at_decision)
+
+        except Exception as e:
+            log.error("early_exit_error", market_id=trade.market_id, error=str(e))
+            continue
+
+
 async def update_unrealized_adverse_moves(db: Database, polymarket_client) -> None:
     """Track unrealized adverse moves for Monk Mode cooldown."""
     open_trades = await db.get_open_trades()

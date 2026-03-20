@@ -74,7 +74,7 @@ async def execute_trade(
     market = candidate.market
 
     if environment == "paper":
-        exec_type = "taker" if candidate.tier == 1 else "maker"
+        exec_type = candidate.execution_type
         result = simulate_execution(
             side=candidate.side,
             price=candidate.market_price,
