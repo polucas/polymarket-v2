@@ -132,10 +132,10 @@ class TestPositionTooSmallSkipRecord:
         with patch("src.scheduler.extract_keywords", return_value=["test"]):
             with patch("src.scheduler.build_grok_context", return_value="ctx"):
                 with patch("src.scheduler.adjust_prediction", return_value=(0.505, 0.58, 0.0)):
-                    with patch("src.scheduler.calculate_edge", return_value=0.05):
+                    with patch("src.scheduler.calculate_spread_adjusted_edge", return_value=0.05):
                         with patch("src.scheduler.determine_side", return_value="BUY_YES"):
                             # 0.25 is below the paper-mode threshold of 0.50
-                            with patch("src.scheduler.kelly_size", return_value=0.25):
+                            with patch("src.scheduler.kelly_size_vwap", return_value=(0.25, 0.50)):
                                 await scheduler._process_market(
                                     market=market, rss_signals=[], scan_mode="active",
                                     candidates=candidates, all_skips=[],

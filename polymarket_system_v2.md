@@ -1,8 +1,17 @@
 # Polymarket Prediction System v2.5 — Complete Project Bible
 
-> **Version:** 2.6 | **Last updated:** 2026-03-19
+> **Version:** 2.7 | **Last updated:** 2026-03-20
 > **Status:** Paper trading (restarted after 2-week pause)
 > **Bankroll:** $10,000 | **Monthly OpEx target:** <$35
+>
+> **v2.7 changes:**
+> - **Spread-aware edge calculation:** Edge now uses best ask (BUY_YES) or best bid (BUY_NO) from CLOB orderbook, not Gamma API midpoint. `OrderBook` model restructured to `OrderBookLevel(price, size)` with `best_bid`, `best_ask`, `spread`, `total_depth` properties.
+> - **VWAP Kelly sizing:** `kelly_size_vwap()` walks orderbook levels to compute volume-weighted average price. Binary-searches for max position size where VWAP still gives edge above min threshold. Prevents oversizing into thin books.
+> - **Maker execution for both tiers:** `TIER1_EXECUTION_TYPE=maker` and `TIER2_EXECUTION_TYPE=maker`. Acknowledges 2-4s LLM inference latency makes taker sniping non-viable. Paper mode fill probability 40-80%.
+> - **Early exit (TP/SL):** Take-profit at +20% ROI, stop-loss at -15% ROI. Checks in existing 5-min resolution loop before auto_resolve. Early-exited trades have PnL but no `actual_outcome` (excluded from Brier/calibration). Feature flag: `EARLY_EXIT_ENABLED`.
+> - **Decoupled RSS polling (30s):** RSS feeds poll independently every 30s via `poll_and_accumulate()`. Tier 1 scan consumes accumulated signals. No longer misses 14/15 minutes of breaking news.
+> - New DB migration v5: `spread_at_decision`, `vwap_price`, `exit_type`, `exit_price` columns on `trade_records`.
+> - 535 tests passing (was 503).
 >
 > **v2.6 changes:**
 > - Model upgraded to `grok-4.20-experimental-beta-0304-reasoning` via new configurable `GROK_MODEL` env var (no more hardcoded model names)
@@ -173,7 +182,7 @@ py-clob-client>=0.1.0    # Polymarket CLOB SDK
 The system must run 24/7 because:
 - Polymarket markets resolve at any hour. Missed resolution windows = missed data for learning.
 - News breaks at any time. The value of news-driven trades degrades in minutes.
-- RSS feeds must be polled every 5 minutes, Twitter every 15 minutes.
+- RSS feeds poll independently every 30 seconds (`RSS_POLL_INTERVAL_SECONDS=30`), decoupled from the Tier 1 scan cycle. Tier 1 consumes accumulated signals. Twitter polled every 15 minutes.
 - The dashboard must be accessible at any time without "waking up" a local machine.
 
 A laptop or local machine fails these requirements — sleep mode, network changes, power outages all break the system.
@@ -1362,16 +1371,30 @@ def check_cluster_exposure(
 
 The `select_best_trades()` function checks cluster limits before adding each trade to the execution list. If a trade would breach the cluster limit, it's skipped even if its score is high.
 
-### 10.3 Edge Calculation
+### 10.3 Edge Calculation (Spread-Aware, v2.7)
 
 ```python
-def calculate_edge(adjusted_prob: float, market_price: float, fee_rate: float) -> float:
-    """Net edge after fees."""
-    raw_edge = abs(adjusted_prob - market_price)
-    return raw_edge - fee_rate
+def calculate_spread_adjusted_edge(
+    adjusted_prob: float, market_price: float, fee_rate: float,
+    side: str, best_bid: Optional[float], best_ask: Optional[float],
+) -> float:
+    """Edge using executable orderbook prices instead of midpoint.
+    BUY_YES: edge vs best_ask (what you'd actually pay).
+    BUY_NO: edge vs best_bid (determines NO price you'd pay).
+    Falls back to market_price if orderbook is empty.
+    """
+    if side == "BUY_YES" and best_ask is not None:
+        effective_price = best_ask
+    elif side == "BUY_NO" and best_bid is not None:
+        effective_price = best_bid
+    else:
+        effective_price = market_price
+    return abs(adjusted_prob - effective_price) - fee_rate
 ```
 
-### 10.4 Kelly Sizing
+> **Why not midpoint?** The Gamma API `yes_price` is often the midpoint between bid and ask. But when you execute, you pay the ask (for YES) or the bid determines your NO cost. Using the midpoint overstates edge by half the spread. For a market with 5-cent spread, that's 2.5 cents of phantom edge — almost the entire `TIER1_MIN_EDGE` of 3%.
+
+### 10.4 Kelly Sizing (VWAP-Aware, v2.7)
 
 ```python
 def kelly_size(adjusted_prob: float, market_price: float, side: str,
@@ -1413,6 +1436,48 @@ def kelly_size(adjusted_prob: float, market_price: float, side: str,
     
     return min(position, max_position)
 ```
+
+### 10.4b VWAP Position Capping (added v2.7)
+
+`kelly_size_vwap()` wraps `kelly_size()` and caps the position at the depth where the volume-weighted average price still gives enough edge:
+
+1. Compute base Kelly size
+2. Walk the orderbook (asks for BUY_YES, bids for BUY_NO) computing VWAP = `total_usd / total_shares`
+3. If VWAP at full Kelly kills edge below `TIER1_MIN_EDGE`, binary-search for max profitable size
+4. Cap at fillable depth
+
+This prevents the scenario where Kelly says $160 but only $50 exists at the top-of-book price. The remaining $110 would eat into worse price levels, turning +EV → -EV.
+
+### 10.5 Early Exit: Take-Profit / Stop-Loss (added v2.7)
+
+The 5-minute resolution loop (`check_early_exits()`) runs **before** `auto_resolve_trades()`:
+
+```python
+TAKE_PROFIT_ROI = 0.20   # +20% ROI triggers exit
+STOP_LOSS_ROI = -0.15    # -15% ROI triggers exit
+EARLY_EXIT_ENABLED = True # Feature flag
+
+# ROI calculation:
+# BUY_YES: ROI = (exit_price / entry_price - 1)
+# BUY_NO:  ROI = ((1 - exit_price) / (1 - entry_price) - 1)
+```
+
+**Key design decisions:**
+- No WebSocket — piggybacks on existing 5-min polling loop
+- Early-exited trades have `exit_type` ("take_profit" or "stop_loss") and `exit_price` set, but `actual_outcome` is NULL
+- PnL is calculated from price movement (partial), not binary resolution (full payout)
+- **Learning system exclusion:** Calibration and Brier scoring filter by `actual_outcome IS NOT NULL`, so early exits are automatically excluded. This is correct — we don't know if the event happened yet.
+- `get_open_trades()` filters `AND exit_type IS NULL` to prevent re-processing
+
+### 10.6 Maker Execution (changed v2.7)
+
+Both Tier 1 and Tier 2 now use maker (limit) orders:
+- `TIER1_EXECUTION_TYPE = "maker"` (was "taker" before v2.7)
+- `TIER2_EXECUTION_TYPE = "maker"` (unchanged)
+
+**Rationale:** LLM inference takes 2-4s. Automated latency bots using regex/keyword triggers execute in <50ms. By the time Grok decides to buy, latency bots have already swept the book. Taker orders execute at massive slippage or fail. Maker orders provide liquidity to panicked human traders reacting to the news — a more realistic and profitable strategy.
+
+Paper mode simulation: fill probability = `0.4 + 0.4 * (1 - abs(price - 0.5))` (40-80%), zero slippage.
 
 ---
 
@@ -1951,6 +2016,12 @@ CREATE TABLE daily_reviews (
 
 -- Index added in v2.6 (migration v3)
 CREATE INDEX idx_trades_market_id_action ON trade_records(market_id, action) WHERE action != 'SKIP';
+
+-- Columns added in v2.7 (migration v5)
+ALTER TABLE trade_records ADD COLUMN spread_at_decision REAL DEFAULT 0.0;
+ALTER TABLE trade_records ADD COLUMN vwap_price REAL DEFAULT 0.0;
+ALTER TABLE trade_records ADD COLUMN exit_type TEXT;        -- "take_profit", "stop_loss", or NULL
+ALTER TABLE trade_records ADD COLUMN exit_price REAL;       -- price at which position was exited
 ```
 
 ---

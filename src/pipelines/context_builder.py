@@ -89,7 +89,11 @@ def build_grok_context(
 
     signals_text = "\n".join(signal_lines) if signal_lines else "  No signals available."
 
-    spread_line = (f"\nSpread: {orderbook.spread:.4f}" if orderbook.spread > 0 else "")
+    try:
+        spread_val = orderbook.spread
+        spread_line = (f"\nSpread: {spread_val:.4f}" if spread_val and spread_val > 0 else "")
+    except (TypeError, AttributeError):
+        spread_line = ""
 
     context = f"""MARKET ANALYSIS REQUEST
 

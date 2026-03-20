@@ -50,23 +50,25 @@ def compute_vwap(
     For bids: levels should be sorted highest-price first.
 
     Returns (vwap_price, fillable_size_usd).
+    VWAP = total_usd_spent / total_shares_bought.
     """
     if not levels or target_size_usd <= 0:
         return 0.0, 0.0
 
-    filled = 0.0
-    cost = 0.0
+    filled_usd = 0.0
+    total_shares = 0.0
     for level in levels:
         level_usd = level.size * level.price
-        remaining = target_size_usd - filled
+        remaining = target_size_usd - filled_usd
         if remaining <= 0:
             break
-        take = min(level_usd, remaining)
-        cost += take
-        filled += take
+        take_usd = min(level_usd, remaining)
+        shares = take_usd / level.price if level.price > 0 else 0.0
+        total_shares += shares
+        filled_usd += take_usd
 
-    vwap = cost / filled if filled > 0 else 0.0
-    return vwap, filled
+    vwap = filled_usd / total_shares if total_shares > 0 else 0.0
+    return vwap, filled_usd
 
 
 def kelly_size_vwap(

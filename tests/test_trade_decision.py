@@ -513,14 +513,16 @@ class TestComputeVWAP:
     def test_multiple_levels(self):
         """VWAP walks multiple levels; filled equals requested USD."""
         levels = [
-            OrderBookLevel(price=0.50, size=100),  # $50 available
-            OrderBookLevel(price=0.55, size=100),  # $55 available
+            OrderBookLevel(price=0.50, size=100),  # $50 available (100 shares * $0.50)
+            OrderBookLevel(price=0.55, size=100),  # $55 available (100 shares * $0.55)
         ]
         vwap, filled = compute_vwap(levels, 80)
-        # level 1: $50 at price 0.50; level 2: $30 remaining at price 0.55
-        # total cost = $80, total filled = $80, vwap = 80/80 = 1.0
+        # level 1: $50 spent, 100 shares at $0.50
+        # level 2: $30 spent, 30/0.55 = 54.545 shares at $0.55
+        # VWAP = $80 / (100 + 54.545) = 0.5176...
         assert filled == 80
-        assert abs(vwap - 1.0) < 1e-9
+        expected_vwap = 80 / (100 + 30 / 0.55)
+        assert abs(vwap - expected_vwap) < 1e-6
 
     def test_partial_fill_insufficient_depth(self):
         """When orderbook is too thin, only fills what's available."""

@@ -16,7 +16,7 @@ pip install -r requirements.txt
 python -m src.main                    # FastAPI on 0.0.0.0:8000
 
 # Tests
-pytest                                # All tests (~503 cases)
+pytest                                # All tests (~535 cases)
 pytest tests/test_config.py           # Single file
 pytest -k "calibration"               # By keyword
 
@@ -34,25 +34,25 @@ python -m src.manage recalculate_learning
 src/
 ├── main.py                  # FastAPI app + lifespan (experiment auto-creation, file logging, startup/shutdown alerts)
 ├── config.py                # Pydantic Settings (40+ env vars) + MonkModeConfig
-├── models.py                # 20 dataclasses (Signal, Market, TradeRecord, Portfolio, DailyReview, etc.)
-├── alerts.py                # Telegram alerting (9 alert types)
-├── scheduler.py             # APScheduler: Tier 1 (15min), resolution (5min), daily summary, self-check, skip records for audit trail
+├── models.py                # 22 dataclasses (Signal, Market, OrderBookLevel, TradeRecord, Portfolio, DailyReview, etc.)
+├── alerts.py                # Telegram alerting (10 alert types, incl. early exit)
+├── scheduler.py             # APScheduler: Tier 1 (15min), RSS (30s), resolution (5min), early exit, daily summary, self-check
 ├── manage.py                # CLI: model_swap, void_trade, experiments
 ├── db/
 │   ├── sqlite.py            # Async SQLite wrapper (aiosqlite, 10 tables)
-│   └── migrations.py        # DDL schema, idempotent migrations (v4)
+│   └── migrations.py        # DDL schema, idempotent migrations (v5)
 ├── pipelines/
 │   ├── signal_classifier.py # Deterministic S1-S6 source tier classification
 │   ├── twitter.py           # TwitterAPI.io client
-│   ├── rss.py               # RSS feed parser + 24h headline dedup
+│   ├── rss.py               # RSS feed parser + 24h headline dedup + 30s signal accumulator
 │   ├── polymarket.py        # Gamma API (markets) + CLOB API (trading)
 │   └── context_builder.py   # Keyword extraction + Grok context formatting
 ├── engine/
 │   ├── grok_client.py       # xAI API wrapper, 3-attempt retry, JSON parse fallback
-│   ├── trade_decision.py    # Edge calc, Kelly sizing (quarter Kelly), Monk Mode
+│   ├── trade_decision.py    # Spread-aware edge calc, VWAP Kelly sizing, Monk Mode
 │   ├── trade_ranker.py      # Score = edge x confidence x time_value, cluster detection
-│   ├── execution.py         # Paper simulation (slippage model) + live CLOB orders
-│   └── resolution.py        # Auto-resolve trades, Brier score calculation
+│   ├── execution.py         # Paper simulation (maker/taker) + live CLOB orders
+│   └── resolution.py        # Auto-resolve trades, early exit (TP/SL), Brier score calculation
 └── learning/
     ├── calibration.py       # 6-bucket Bayesian calibration (uses RAW predictions)
     ├── market_type.py       # Per-market-type Brier tracking with exponential decay
@@ -64,7 +64,7 @@ src/
 config/
 ├── known_sources.yaml       # S1-S6 tier mappings (handles, domains, keywords)
 └── rss_feeds.yaml           # RSS feed URLs (Reuters, AP, BBC, CoinDesk)
-tests/                       # 24 test files mirroring src/ structure
+tests/                       # 26 test files mirroring src/ structure
 docs/
 ├── TASKS.md                 # 12 dev agent specs (DEV-01 through DEV-12)
 └── TESTS.md                 # 10 test agent specs with execution DAG
@@ -89,6 +89,16 @@ docs/
 
 **Daily self-check (Autoresearch):** Runs 15 min after nightly summary. Gathers metrics (win rate, ROI, Brier by type, calibration drift, skip reasons), calls Grok for analysis, persists to `daily_reviews` table + `data/daily_reviews/*.md`, sends Telegram alert. Does NOT auto-implement changes.
 
+**Spread-aware edge:** Edge uses best ask price (BUY_YES) or best bid price (BUY_NO) from the CLOB orderbook, not the Gamma API midpoint. Falls back to `market.yes_price` if orderbook is empty. Implemented in `calculate_spread_adjusted_edge()`.
+
+**VWAP Kelly sizing:** Kelly position size is capped by profitable orderbook depth. `kelly_size_vwap()` walks the orderbook levels, computes volume-weighted average price, and binary-searches for the maximum size where VWAP still gives edge above `TIER1_MIN_EDGE`. Prevents oversizing into thin books.
+
+**Maker execution:** Both Tier 1 and Tier 2 use maker (limit) orders (`TIER1_EXECUTION_TYPE=maker`). Paper mode simulates fill probability 40-80% with zero slippage. This acknowledges that LLM inference latency (2-4s) makes taker sniping non-viable.
+
+**Early exit (TP/SL):** The 5-min resolution loop checks open trades for take-profit (+20% ROI) and stop-loss (-15% ROI) before checking for market resolution. Early-exited trades have PnL but no `actual_outcome` — excluded from Brier/calibration metrics. Feature flag: `EARLY_EXIT_ENABLED`.
+
+**RSS signal accumulator:** RSS feeds poll independently every 30s (`RSS_POLL_INTERVAL_SECONDS`) via `poll_and_accumulate()`. Tier 1 scan consumes accumulated signals via `consume_signals()`. Tier 2 still calls `get_breaking_news()` directly.
+
 **Trade scoring:** `edge x adjusted_confidence x (1.0 / max(resolution_hours, 0.5))`. Candidates are ranked per scan cycle, not first-come-first-served. Cluster detection prevents overexposure to correlated markets.
 
 ## Key Configuration
@@ -102,6 +112,9 @@ docs/
 - **Duplicate prevention:** 24h market cooldown, 60% question similarity threshold
 - **Environment:** `ENVIRONMENT=paper` (start here) or `live`
 - **DB:** SQLite at `data/predictor.db` (WAL mode)
+- **RSS polling:** 30s independent cycle (`RSS_POLL_INTERVAL_SECONDS=30`)
+- **Execution:** Both tiers use maker orders (`TIER1_EXECUTION_TYPE=maker`, `TIER2_EXECUTION_TYPE=maker`)
+- **Early exit:** Take-profit at +20% ROI, stop-loss at -15% ROI (`EARLY_EXIT_ENABLED=true`)
 - **Dashboard:** `/health` (status), `/reviews` and `/reviews/{date}` (daily self-check reports)
 
 ## Conventions
@@ -125,3 +138,7 @@ docs/
 - **GROK_MODEL env var:** Model name is no longer hardcoded. Set `GROK_MODEL` in `.env` to change models. After changing, run `python -m src.manage model_swap` to reset calibration properly.
 - **Paper mode relaxations:** Min position threshold is $0.50 in paper mode vs $1.00 in live. `TIER1_MIN_EDGE` defaults to 0.03 (can increase for live).
 - **Daily reviews:** Written to both DB (`daily_reviews` table) and `data/daily_reviews/YYYY-MM-DD.md`. Check `/reviews` endpoint or the markdown files for daily performance analysis.
+- **OrderBookLevel vs plain floats:** `OrderBook.bids` and `OrderBook.asks` are `List[OrderBookLevel]` (price + size), NOT plain floats. Tests using mock OrderBooks must use `OrderBookLevel` objects or mock the `spread`/`total_depth` properties.
+- **Early-exited trades have no actual_outcome:** They have PnL and `exit_type` set but `actual_outcome` is NULL. The learning system (calibration, Brier) correctly skips them. The `get_open_trades()` query filters `AND exit_type IS NULL` to avoid re-processing.
+- **VWAP returns price, not 1.0:** `compute_vwap()` returns `total_usd / total_shares` — the volume-weighted average *price* per share, not a USD ratio. VWAP is used in `kelly_size_vwap()` to cap position size at the depth where the trade remains profitable.
+- **RSS accumulator lock:** `poll_and_accumulate()` uses an `asyncio.Lock` to prevent race conditions with `consume_signals()`. The lock is per-instance, not global.
