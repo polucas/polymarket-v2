@@ -170,10 +170,12 @@ class PolymarketClient:
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                raw_bids = sorted(data.get("bids", []), key=lambda b: float(b.get("price", 0)), reverse=True)
+                raw_asks = sorted(data.get("asks", []), key=lambda a: float(a.get("price", 0)))
                 bids = [OrderBookLevel(price=float(b.get("price", 0)), size=float(b.get("size", 0)))
-                        for b in (data.get("bids", []))[:5]]
+                        for b in raw_bids[:5]]
                 asks = [OrderBookLevel(price=float(a.get("price", 0)), size=float(a.get("size", 0)))
-                        for a in (data.get("asks", []))[:5]]
+                        for a in raw_asks[:5]]
                 return OrderBook(market_id=market_id, bids=bids, asks=asks, timestamp=datetime.now(timezone.utc))
         except Exception as e:
             log.warning("orderbook_fetch_failed", market_id=market_id, error=str(e))
