@@ -4,7 +4,7 @@
 
 Automated prediction market trading bot targeting Polymarket. Detects news events, estimates probabilities via Grok LLM, compares to market prices, and trades when it finds an edge. Two tiers: Tier 1 (news-driven event markets, 15min-7d resolution) and Tier 2 (crypto, 15min resolution, trigger-based).
 
-**Design doc:** `polymarket_system_v2.md` (v2.5, 2300+ lines) — the single source of truth for all system behavior. Consult it for rationale behind any design decision.
+**Design doc:** `polymarket_system_v2.md` (v2.7, 2500+ lines) — the single source of truth for all system behavior. Consult it for rationale behind any design decision.
 
 ## Commands
 
@@ -85,7 +85,7 @@ docs/
 
 **Risk management (Monk Mode):** Daily loss -5%, weekly -10%, consecutive adverse cooldown (3+), max exposure 30%, API budget $15/day. All enforced in `src/engine/trade_decision.py`.
 
-**Duplicate bet prevention:** 24h cooldown after trading a market (`MARKET_COOLDOWN_HOURS`), plus Jaccard keyword-overlap similarity check at 60% threshold (`QUESTION_SIMILARITY_THRESHOLD`) to block near-duplicate questions. Skip reasons: `market_cooldown`, `similar_to_{id}`.
+**Duplicate bet prevention:** 24h cooldown after trading a market (`MARKET_COOLDOWN_HOURS`), plus Jaccard keyword-overlap similarity check at 60% threshold (`QUESTION_SIMILARITY_THRESHOLD`) to block near-duplicate questions. Additionally, a 2h evaluation cooldown (`EVALUATION_COOLDOWN_HOURS`) prevents re-calling Grok on the same market within 2 hours (silent skip, no DB record). Skip reasons: `market_cooldown`, `similar_to_{id}`.
 
 **Daily self-check (Autoresearch):** Runs 15 min after nightly summary. Gathers metrics (win rate, ROI, Brier by type, calibration drift, skip reasons), calls Grok for analysis, persists to `daily_reviews` table + `data/daily_reviews/*.md`, sends Telegram alert. Does NOT auto-implement changes.
 
@@ -109,7 +109,7 @@ docs/
 - **Tier 2:** 2-3 min scan (only during active news window), 15-min resolution, 3 trades/day cap
 - **Market fetch:** 200 markets per scan (`MARKET_FETCH_LIMIT=200`)
 - **API budget:** $15/day (`DAILY_API_BUDGET_USD=15.0`)
-- **Duplicate prevention:** 24h market cooldown, 60% question similarity threshold
+- **Duplicate prevention:** 24h market cooldown, 2h evaluation cooldown, 60% question similarity threshold
 - **Environment:** `ENVIRONMENT=paper` (start here) or `live`
 - **DB:** SQLite at `data/predictor.db` (WAL mode)
 - **RSS polling:** 30s independent cycle (`RSS_POLL_INTERVAL_SECONDS=30`)
@@ -138,7 +138,8 @@ docs/
 - **GROK_MODEL env var:** Model name is no longer hardcoded. Set `GROK_MODEL` in `.env` to change models. After changing, run `python -m src.manage model_swap` to reset calibration properly.
 - **Paper mode relaxations:** Min position threshold is $0.50 in paper mode vs $1.00 in live. `TIER1_MIN_EDGE` defaults to 0.03 (can increase for live).
 - **Daily reviews:** Written to both DB (`daily_reviews` table) and `data/daily_reviews/YYYY-MM-DD.md`. Check `/reviews` endpoint or the markdown files for daily performance analysis.
-- **OrderBookLevel vs plain floats:** `OrderBook.bids` and `OrderBook.asks` are `List[OrderBookLevel]` (price + size), NOT plain floats. Tests using mock OrderBooks must use `OrderBookLevel` objects or mock the `spread`/`total_depth` properties.
+- **OrderBookLevel vs plain floats:** `OrderBook.bids` and `OrderBook.asks` are `List[OrderBookLevel]` (price + size), NOT plain floats. Bids are sorted descending by price, asks ascending, before slicing top 5 from the CLOB API. Tests using mock OrderBooks must use `OrderBookLevel` objects or mock the `spread`/`total_depth` properties.
+- **Evaluation cooldown:** Markets that received a Grok evaluation (including low_edge SKIPs) are silently skipped for 2 hours (`EVALUATION_COOLDOWN_HOURS`). No DB record is written for these skips to avoid bloating the `trade_records` table. This prevents wasteful repeated LLM calls on the same market when few markets pass the resolution filter.
 - **Early-exited trades have no actual_outcome:** They have PnL and `exit_type` set but `actual_outcome` is NULL. The learning system (calibration, Brier) correctly skips them. The `get_open_trades()` query filters `AND exit_type IS NULL` to avoid re-processing.
 - **VWAP returns price, not 1.0:** `compute_vwap()` returns `total_usd / total_shares` — the volume-weighted average *price* per share, not a USD ratio. VWAP is used in `kelly_size_vwap()` to cap position size at the depth where the trade remains profitable.
 - **RSS accumulator lock:** `poll_and_accumulate()` uses an `asyncio.Lock` to prevent race conditions with `consume_signals()`. The lock is per-instance, not global.

@@ -1,8 +1,12 @@
 # Polymarket Prediction System v2.5 — Complete Project Bible
 
-> **Version:** 2.7 | **Last updated:** 2026-03-20
+> **Version:** 2.7.1 | **Last updated:** 2026-03-26
 > **Status:** Paper trading (restarted after 2-week pause)
 > **Bankroll:** $10,000 | **Monthly OpEx target:** <$35
+>
+> **v2.7.1 changes:**
+> - **Orderbook sorting fix:** Bids are now sorted descending by price and asks ascending before slicing top 5 from CLOB API. Previously unsorted data could return non-best levels.
+> - **Evaluation cooldown (2h):** Markets that received a Grok evaluation (including low_edge SKIPs) are silently skipped for 2 hours (`EVALUATION_COOLDOWN_HOURS=2.0`). Prevents wasteful repeated LLM calls when few markets pass the resolution filter. No DB record written for these skips (avoids bloat).
 >
 > **v2.7 changes:**
 > - **Spread-aware edge calculation:** Edge now uses best ask (BUY_YES) or best bid (BUY_NO) from CLOB orderbook, not Gamma API midpoint. `OrderBook` model restructured to `OrderBookLevel(price, size)` with `best_bid`, `best_ask`, `spread`, `total_depth` properties.
@@ -1162,9 +1166,10 @@ In addition to Monk Mode, the scheduler prevents duplicate bets via:
 
 1. **Open position check**: Exact `market_id` match — skips if already holding a position
 2. **Cooldown check**: `MARKET_COOLDOWN_HOURS=24.0` — skips markets traded within window (even if resolved)
-3. **Similarity check**: `QUESTION_SIMILARITY_THRESHOLD=0.60` — Jaccard keyword overlap blocks near-duplicate questions of the same `market_type`
+3. **Evaluation cooldown**: `EVALUATION_COOLDOWN_HOURS=2.0` — skips markets that already received a Grok evaluation (including low_edge SKIPs) within 2 hours. Silent skip (no DB record) to avoid bloating `trade_records`. Prevents wasteful repeated LLM calls when few markets pass the resolution filter.
+4. **Similarity check**: `QUESTION_SIMILARITY_THRESHOLD=0.60` — Jaccard keyword overlap blocks near-duplicate questions of the same `market_type`
 
-All blocks produce auditable SKIP records (`market_cooldown`, `similar_to_{id}`).
+Checks 1, 2, and 4 produce auditable SKIP records (`market_cooldown`, `similar_to_{id}`). Check 3 is a silent skip to avoid DB bloat.
 
 ### 9.2 Enforcement
 
