@@ -34,6 +34,8 @@ def _build_scheduler() -> Scheduler:
     settings.MARKET_COOLDOWN_HOURS = 24.0
     settings.QUESTION_SIMILARITY_THRESHOLD = 0.60
     settings.MARKET_FETCH_LIMIT = 200
+    settings.MARKET_PAGE_SIZE = 500
+    settings.MARKET_FETCH_PAGES = 3
 
     db = AsyncMock()
     polymarket = AsyncMock()

@@ -39,28 +39,44 @@ class PolymarketClient:
         Tier 1: resolution 15m-7d, liquidity > $5K
         Tier 2: crypto markets, 15-min resolution
         """
+        all_raw = []
+        page_size = self._settings.MARKET_PAGE_SIZE
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                params = {"active": "true", "closed": "false", "limit": self._settings.MARKET_FETCH_LIMIT}
-                resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
-                if resp.status_code == 429:
-                    log.warning("polymarket_rate_limited")
-                    return []
-                resp.raise_for_status()
-                raw_markets = resp.json()
+                for page in range(self._settings.MARKET_FETCH_PAGES):
+                    params = {
+                        "active": "true",
+                        "closed": "false",
+                        "limit": page_size,
+                        "offset": page * page_size,
+                        "order": "volume24hr",
+                        "ascending": "false",
+                    }
+                    resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
+                    if resp.status_code == 429:
+                        log.warning("polymarket_rate_limited", page=page)
+                        break  # Keep what we have so far instead of returning empty
+                    resp.raise_for_status()
+                    page_markets = resp.json()
+                    all_raw.extend(page_markets)
+                    log.debug("market_page_fetched", page=page, count=len(page_markets))
+                    if len(page_markets) < page_size:
+                        break  # No more pages
         except httpx.TimeoutException:
             log.warning("polymarket_timeout")
-            return []
+            if not all_raw:
+                return []
         except Exception as e:
             log.error("polymarket_fetch_failed", error=str(e))
-            return []
+            if not all_raw:
+                return []
 
         markets = []
         now = datetime.now(timezone.utc)
         total_parsed = 0
         filtered_resolution = 0
         filtered_liquidity = 0
-        for m in raw_markets:
+        for m in all_raw:
             try:
                 # Parse prices
                 outcomes = m.get("outcomes", [])
@@ -152,6 +168,7 @@ class PolymarketClient:
         log.info("market_filter_results",
                  tier=tier,
                  total_from_api=total_parsed,
+                 total_raw=len(all_raw),
                  passed=len(markets),
                  filtered_resolution=filtered_resolution,
                  filtered_liquidity=filtered_liquidity)

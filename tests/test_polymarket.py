@@ -394,25 +394,27 @@ class TestPlaceOrder:
 
 
 # ---------------------------------------------------------------------------
-# MARKET_FETCH_LIMIT — configurable market fetch limit
+# Pagination — volume-sorted multi-page fetch
 # ---------------------------------------------------------------------------
 
 
-class TestMarketFetchLimit:
-    def test_default_market_fetch_limit_is_200(self):
-        """MARKET_FETCH_LIMIT defaults to 200 in Settings."""
+class TestPagination:
+    def test_default_pagination_settings(self):
+        """Pagination defaults: page_size=500, pages=3."""
         settings = _make_settings()
+        assert settings.MARKET_PAGE_SIZE == 500
+        assert settings.MARKET_FETCH_PAGES == 3
+        # Backward compat
         assert settings.MARKET_FETCH_LIMIT == 200
 
     @pytest.mark.asyncio
-    async def test_market_fetch_limit_used_in_api_call(self):
-        """get_active_markets passes MARKET_FETCH_LIMIT to the API query params."""
-        settings = _make_settings()
-        # Override to a custom value to verify it's forwarded
+    async def test_page_size_used_in_api_call(self):
+        """get_active_markets passes MARKET_PAGE_SIZE as limit to the API."""
         settings = Settings(
             XAI_API_KEY="test-key",
             POLYMARKET_API_KEY="test-pm-key",
-            MARKET_FETCH_LIMIT=150,
+            MARKET_PAGE_SIZE=300,
+            MARKET_FETCH_PAGES=1,
         )
         client = PolymarketClient(settings)
 
@@ -425,9 +427,75 @@ class TestMarketFetchLimit:
         with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
             await client.get_active_markets(tier=1)
 
-        call_kwargs = mock_client_instance.get.call_args
-        params = call_kwargs[1].get("params") or call_kwargs[0][1] if len(call_kwargs[0]) > 1 else call_kwargs.kwargs.get("params")
-        # Extract params from the call
-        assert call_kwargs is not None
-        actual_params = mock_client_instance.get.call_args.kwargs.get("params") or mock_client_instance.get.call_args[1].get("params")
-        assert actual_params["limit"] == 150
+        actual_params = mock_client_instance.get.call_args.kwargs.get("params")
+        assert actual_params["limit"] == 300
+        assert actual_params["offset"] == 0
+        assert actual_params["order"] == "volume24hr"
+        assert actual_params["ascending"] == "false"
+
+    @pytest.mark.asyncio
+    async def test_multiple_pages_fetched(self):
+        """Multiple pages are fetched when first page is full."""
+        settings = Settings(
+            XAI_API_KEY="test-key",
+            POLYMARKET_API_KEY="test-pm-key",
+            MARKET_PAGE_SIZE=2,
+            MARKET_FETCH_PAGES=3,
+        )
+        client = PolymarketClient(settings)
+
+        page1 = [
+            _make_raw_market(id="m1", hours_ahead=6.0, liquidity=10_000),
+            _make_raw_market(id="m2", hours_ahead=6.0, liquidity=10_000),
+        ]
+        page2 = [
+            _make_raw_market(id="m3", hours_ahead=6.0, liquidity=10_000),
+        ]  # Short page — stops pagination
+
+        responses = [_mock_response(json_data=page1), _mock_response(json_data=page2)]
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(side_effect=responses)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
+            markets = await client.get_active_markets(tier=1)
+
+        # 2 pages fetched (page2 is short, so no page3)
+        assert mock_client_instance.get.call_count == 2
+        assert len(markets) == 3
+        # Verify offsets
+        call1_params = mock_client_instance.get.call_args_list[0].kwargs["params"]
+        call2_params = mock_client_instance.get.call_args_list[1].kwargs["params"]
+        assert call1_params["offset"] == 0
+        assert call2_params["offset"] == 2
+
+    @pytest.mark.asyncio
+    async def test_429_mid_pagination_keeps_existing(self):
+        """Rate limit on page 2 keeps markets from page 1."""
+        settings = Settings(
+            XAI_API_KEY="test-key",
+            POLYMARKET_API_KEY="test-pm-key",
+            MARKET_PAGE_SIZE=2,
+            MARKET_FETCH_PAGES=3,
+        )
+        client = PolymarketClient(settings)
+
+        page1 = [
+            _make_raw_market(id="m1", hours_ahead=6.0, liquidity=10_000),
+            _make_raw_market(id="m2", hours_ahead=6.0, liquidity=10_000),
+        ]
+        rate_limited_resp = MagicMock(spec=httpx.Response)
+        rate_limited_resp.status_code = 429
+
+        responses = [_mock_response(json_data=page1), rate_limited_resp]
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(side_effect=responses)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
+            markets = await client.get_active_markets(tier=1)
+
+        # Should still have the 2 markets from page 1
+        assert len(markets) == 2

@@ -68,8 +68,9 @@ class Database:
                 action, skip_reason, position_size_usd, kelly_fraction_used, market_cluster_id,
                 actual_outcome, pnl, brier_score_raw, brier_score_adjusted, resolved_at,
                 unrealized_adverse_move, voided, void_reason,
-                spread_at_decision, vwap_price, exit_type, exit_price
-            ) VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?)""",
+                spread_at_decision, vwap_price, exit_type, exit_price,
+                clob_token_id_yes, clob_token_id_no
+            ) VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?, ?,?)""",
             (
                 r.record_id, r.experiment_run, _iso(r.timestamp), r.model_used,
                 r.market_id, r.market_question, r.market_type, r.resolution_window_hours,
@@ -85,6 +86,7 @@ class Database:
                 r.actual_outcome, r.pnl, r.brier_score_raw, r.brier_score_adjusted,
                 _iso(r.resolved_at), r.unrealized_adverse_move, r.voided, r.void_reason,
                 r.spread_at_decision, r.vwap_price, r.exit_type, r.exit_price,
+                r.clob_token_id_yes, r.clob_token_id_no,
             ),
         )
         await self._conn.commit()
@@ -133,6 +135,8 @@ class Database:
             vwap_price=row["vwap_price"] if "vwap_price" in row.keys() else 0.0,
             exit_type=row["exit_type"] if "exit_type" in row.keys() else None,
             exit_price=row["exit_price"] if "exit_price" in row.keys() else None,
+            clob_token_id_yes=row["clob_token_id_yes"] if "clob_token_id_yes" in row.keys() else "",
+            clob_token_id_no=row["clob_token_id_no"] if "clob_token_id_no" in row.keys() else "",
         )
 
     async def get_trade(self, record_id: str) -> Optional[TradeRecord]:

@@ -31,6 +31,8 @@ class TestMarketFeeRate:
     async def test_tier1_market_fee_rate_zero(self):
         settings = MagicMock(spec=Settings)
         settings.MARKET_FETCH_LIMIT = 200
+        settings.MARKET_PAGE_SIZE = 500
+        settings.MARKET_FETCH_PAGES = 3
         client = PolymarketClient(settings)
 
         mock_resp = MagicMock()
@@ -54,6 +56,8 @@ class TestMarketFeeRate:
     async def test_tier2_market_fee_rate(self):
         settings = MagicMock(spec=Settings)
         settings.MARKET_FETCH_LIMIT = 200
+        settings.MARKET_PAGE_SIZE = 500
+        settings.MARKET_FETCH_PAGES = 3
         client = PolymarketClient(settings)
 
         # Use a crypto market for tier 2

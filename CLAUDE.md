@@ -40,7 +40,7 @@ src/
 ├── manage.py                # CLI: model_swap, void_trade, experiments
 ├── db/
 │   ├── sqlite.py            # Async SQLite wrapper (aiosqlite, 10 tables)
-│   └── migrations.py        # DDL schema, idempotent migrations (v5)
+│   └── migrations.py        # DDL schema, idempotent migrations (v6)
 ├── pipelines/
 │   ├── signal_classifier.py # Deterministic S1-S6 source tier classification
 │   ├── twitter.py           # TwitterAPI.io client
@@ -52,7 +52,8 @@ src/
 │   ├── trade_decision.py    # Spread-aware edge calc, VWAP Kelly sizing, Monk Mode
 │   ├── trade_ranker.py      # Score = edge x confidence x time_value, cluster detection
 │   ├── execution.py         # Paper simulation (maker/taker) + live CLOB orders
-│   └── resolution.py        # Auto-resolve trades, early exit (TP/SL), Brier score calculation
+│   ├── ws_exit.py           # Real-time WebSocket TP/SL monitor (Polymarket market channel)
+│   └── resolution.py        # Auto-resolve trades, early exit (TP/SL fallback), Brier score calculation
 └── learning/
     ├── calibration.py       # 6-bucket Bayesian calibration (uses RAW predictions)
     ├── market_type.py       # Per-market-type Brier tracking with exponential decay
@@ -95,7 +96,7 @@ docs/
 
 **Maker execution:** Both Tier 1 and Tier 2 use maker (limit) orders (`TIER1_EXECUTION_TYPE=maker`). Paper mode simulates fill probability 40-80% with zero slippage. This acknowledges that LLM inference latency (2-4s) makes taker sniping non-viable.
 
-**Early exit (TP/SL):** The 5-min resolution loop checks open trades for take-profit (+20% ROI) and stop-loss (-15% ROI) before checking for market resolution. Early-exited trades have PnL but no `actual_outcome` — excluded from Brier/calibration metrics. Feature flag: `EARLY_EXIT_ENABLED`.
+**Early exit (TP/SL):** Real-time WebSocket monitoring (`src/engine/ws_exit.py`) subscribes to Polymarket's market channel for YES tokens of open positions. On book update, best bid is checked against TP (+20% ROI) and SL (-15% ROI) thresholds for instant exit. The 5-min polling loop (`check_early_exits()`) is kept as fallback when WS is disconnected. Early-exited trades have PnL but no `actual_outcome` — excluded from Brier/calibration metrics. Feature flag: `EARLY_EXIT_ENABLED`.
 
 **RSS signal accumulator:** RSS feeds poll independently every 30s (`RSS_POLL_INTERVAL_SECONDS`) via `poll_and_accumulate()`. Tier 1 scan consumes accumulated signals via `consume_signals()`. Tier 2 still calls `get_breaking_news()` directly.
 
@@ -107,7 +108,7 @@ docs/
 - **Bankroll:** $10,000 (set in `config.py` INITIAL_BANKROLL). Max bet $160 via `MAX_POSITION_PCT=0.016` applied to live `portfolio.total_equity`.
 - **Tier 1:** 15-min scan interval, resolution 15min-7d, 20 trades/day cap, 0% fee, 3% min edge
 - **Tier 2:** 2-3 min scan (only during active news window), 15-min resolution, 3 trades/day cap
-- **Market fetch:** 200 markets per scan (`MARKET_FETCH_LIMIT=200`)
+- **Market fetch:** 3 pages x 500 markets sorted by volume (`MARKET_PAGE_SIZE=500`, `MARKET_FETCH_PAGES=3`) = up to 1,500 most active markets per scan
 - **API budget:** $15/day (`DAILY_API_BUDGET_USD=15.0`)
 - **Duplicate prevention:** 24h market cooldown, 2h evaluation cooldown, 60% question similarity threshold
 - **Environment:** `ENVIRONMENT=paper` (start here) or `live`
@@ -143,3 +144,5 @@ docs/
 - **Early-exited trades have no actual_outcome:** They have PnL and `exit_type` set but `actual_outcome` is NULL. The learning system (calibration, Brier) correctly skips them. The `get_open_trades()` query filters `AND exit_type IS NULL` to avoid re-processing.
 - **VWAP returns price, not 1.0:** `compute_vwap()` returns `total_usd / total_shares` — the volume-weighted average *price* per share, not a USD ratio. VWAP is used in `kelly_size_vwap()` to cap position size at the depth where the trade remains profitable.
 - **RSS accumulator lock:** `poll_and_accumulate()` uses an `asyncio.Lock` to prevent race conditions with `consume_signals()`. The lock is per-instance, not global.
+- **WebSocket exit manager:** `RealTimeExitManager` in `src/engine/ws_exit.py` subscribes to YES tokens of open positions on the Polymarket market channel (`wss://ws-subscriptions-clob.polymarket.com/ws/market`). It calculates ROI from the best bid (sell price) and triggers instant TP/SL exits. The 5-min polling fallback in `check_early_exits()` catches anything missed during WS disconnects. Positions are tracked by `clob_token_id_yes` (stored in TradeRecord since migration v6).
+- **Pagination settings for mocked tests:** Tests that mock `Settings` with `spec=Settings` must set `MARKET_PAGE_SIZE` and `MARKET_FETCH_PAGES` in addition to `MARKET_FETCH_LIMIT` for any test calling `get_active_markets()`.

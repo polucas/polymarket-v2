@@ -36,6 +36,8 @@ class TestClobTokenIdExtraction:
     async def test_market_has_clob_token_ids(self):
         settings = MagicMock(spec=Settings)
         settings.MARKET_FETCH_LIMIT = 200
+        settings.MARKET_PAGE_SIZE = 500
+        settings.MARKET_FETCH_PAGES = 3
         client = PolymarketClient(settings)
 
         mock_resp = MagicMock()
@@ -61,6 +63,8 @@ class TestClobTokenIdExtraction:
     async def test_missing_clob_token_ids_defaults_empty(self):
         settings = MagicMock(spec=Settings)
         settings.MARKET_FETCH_LIMIT = 200
+        settings.MARKET_PAGE_SIZE = 500
+        settings.MARKET_FETCH_PAGES = 3
         client = PolymarketClient(settings)
 
         mock_resp = MagicMock()
@@ -87,6 +91,8 @@ class TestGetOrderbookTokenId:
     async def test_orderbook_passes_token_id_to_clob(self):
         settings = MagicMock(spec=Settings)
         settings.MARKET_FETCH_LIMIT = 200
+        settings.MARKET_PAGE_SIZE = 500
+        settings.MARKET_FETCH_PAGES = 3
         client = PolymarketClient(settings)
 
         mock_resp = MagicMock()
@@ -111,6 +117,8 @@ class TestGetOrderbookTokenId:
     async def test_empty_token_id_returns_empty_orderbook(self):
         settings = MagicMock(spec=Settings)
         settings.MARKET_FETCH_LIMIT = 200
+        settings.MARKET_PAGE_SIZE = 500
+        settings.MARKET_FETCH_PAGES = 3
         client = PolymarketClient(settings)
 
         ob = await client.get_orderbook("", market_id="517310")

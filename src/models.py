@@ -201,6 +201,9 @@ class TradeRecord:
     exit_type: Optional[str] = None
     exit_price: Optional[float] = None
 
+    clob_token_id_yes: str = ""
+    clob_token_id_no: str = ""
+
     voided: bool = False
     void_reason: Optional[str] = None
 

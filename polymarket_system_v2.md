@@ -12,16 +12,17 @@
 > - **Spread-aware edge calculation:** Edge now uses best ask (BUY_YES) or best bid (BUY_NO) from CLOB orderbook, not Gamma API midpoint. `OrderBook` model restructured to `OrderBookLevel(price, size)` with `best_bid`, `best_ask`, `spread`, `total_depth` properties.
 > - **VWAP Kelly sizing:** `kelly_size_vwap()` walks orderbook levels to compute volume-weighted average price. Binary-searches for max position size where VWAP still gives edge above min threshold. Prevents oversizing into thin books.
 > - **Maker execution for both tiers:** `TIER1_EXECUTION_TYPE=maker` and `TIER2_EXECUTION_TYPE=maker`. Acknowledges 2-4s LLM inference latency makes taker sniping non-viable. Paper mode fill probability 40-80%.
-> - **Early exit (TP/SL):** Take-profit at +20% ROI, stop-loss at -15% ROI. Checks in existing 5-min resolution loop before auto_resolve. Early-exited trades have PnL but no `actual_outcome` (excluded from Brier/calibration). Feature flag: `EARLY_EXIT_ENABLED`.
+> - **Early exit (TP/SL):** Real-time WebSocket monitoring via `RealTimeExitManager` subscribes to Polymarket market channel for instant TP (+20% ROI) / SL (-15% ROI) triggers. 5-min polling fallback when WS disconnected. Feature flag: `EARLY_EXIT_ENABLED`.
 > - **Decoupled RSS polling (30s):** RSS feeds poll independently every 30s via `poll_and_accumulate()`. Tier 1 scan consumes accumulated signals. No longer misses 14/15 minutes of breaking news.
-> - New DB migration v5: `spread_at_decision`, `vwap_price`, `exit_type`, `exit_price` columns on `trade_records`.
+> - **Volume-sorted pagination:** Market scanner fetches 3 pages x 500 markets sorted by `volume24hr` desc (1,500 most active markets), up from a single unsorted fetch of 200.
+> - DB migration v6: `clob_token_id_yes`, `clob_token_id_no` columns on `trade_records` (for WS subscription tracking).
 > - 535 tests passing (was 503).
 >
 > **v2.6 changes:**
 > - Model upgraded to `grok-4.20-experimental-beta-0304-reasoning` via new configurable `GROK_MODEL` env var (no more hardcoded model names)
 > - Added duplicate bet prevention: 24h cooldown after trading a market + Jaccard keyword-overlap similarity check (60% threshold) blocks near-duplicate questions. Skip reasons: `market_cooldown`, `similar_to_{id}`.
 > - Added daily self-check loop (Karpathy "Autoresearch" inspired): gathers metrics, calls Grok for analysis, persists `DailyReview` to DB + `data/daily_reviews/*.md`, sends Telegram alert with health status and recommendations. Does NOT auto-implement changes.
-> - Relaxed paper trading constraints for faster evaluation: `TIER1_MIN_EDGE` 4%→3%, market fetch 100→200, API budget $8→$15/day, paper mode min position $1→$0.50. Target: 5+ trades/day.
+> - Relaxed paper trading constraints for faster evaluation: `TIER1_MIN_EDGE` 4%→3%, market fetch 100→200 (now 1,500 via volume-sorted pagination), API budget $8→$15/day, paper mode min position $1→$0.50. Target: 5+ trades/day.
 > - New API endpoints: `GET /reviews` and `GET /reviews/{date}` for daily self-check reports.
 > - New DB table: `daily_reviews` (migration v4). New index on `trade_records(market_id, action)` (migration v3).
 > - Fixed pre-existing test failures from stale endDate values in polymarket test mocks.
@@ -1453,26 +1454,38 @@ def kelly_size(adjusted_prob: float, market_price: float, side: str,
 
 This prevents the scenario where Kelly says $160 but only $50 exists at the top-of-book price. The remaining $110 would eat into worse price levels, turning +EV → -EV.
 
-### 10.5 Early Exit: Take-Profit / Stop-Loss (added v2.7)
+### 10.5 Early Exit: Take-Profit / Stop-Loss (v2.7 → v2.8 WebSocket)
 
-The 5-minute resolution loop (`check_early_exits()`) runs **before** `auto_resolve_trades()`:
+**Primary: Real-time WebSocket monitoring** (`src/engine/ws_exit.py`):
+- `RealTimeExitManager` subscribes to the Polymarket market channel (`wss://ws-subscriptions-clob.polymarket.com/ws/market`) for YES tokens of open positions
+- On each orderbook update, best bid (sell price) is checked against TP/SL thresholds
+- When triggered, exit is executed instantly — no 5-minute wait
+- Uses `aiohttp` WebSocket client (already a dependency)
+- Auto-reconnect with exponential backoff (max 30s)
+- Position subscriptions refreshed every 60s to catch new trades
+
+**Fallback: 5-minute polling** (`check_early_exits()` in resolution.py) runs before `auto_resolve_trades()` in the scheduler. Catches anything missed during WS disconnects.
 
 ```python
 TAKE_PROFIT_ROI = 0.20   # +20% ROI triggers exit
 STOP_LOSS_ROI = -0.15    # -15% ROI triggers exit
-EARLY_EXIT_ENABLED = True # Feature flag
+EARLY_EXIT_ENABLED = True # Feature flag (controls both WS and polling)
 
-# ROI calculation:
+# ROI calculation (same for both WS and polling):
 # BUY_YES: ROI = (exit_price / entry_price - 1)
 # BUY_NO:  ROI = ((1 - exit_price) / (1 - entry_price) - 1)
 ```
 
 **Key design decisions:**
-- No WebSocket — piggybacks on existing 5-min polling loop
+- WS subscribes to YES token for all positions — best bid used as `current_yes_price`, reusing existing `calculate_unrealized_roi()`
+- Exit execution uses taker orders (guaranteed fill matters for TP/SL)
+- Double-fire prevention: position removed from tracking immediately before DB update
+- `clob_token_id_yes` and `clob_token_id_no` stored in TradeRecord (migration v6) so WS manager knows what to subscribe to without extra API calls
 - Early-exited trades have `exit_type` ("take_profit" or "stop_loss") and `exit_price` set, but `actual_outcome` is NULL
 - PnL is calculated from price movement (partial), not binary resolution (full payout)
-- **Learning system exclusion:** Calibration and Brier scoring filter by `actual_outcome IS NOT NULL`, so early exits are automatically excluded. This is correct — we don't know if the event happened yet.
+- **Learning system exclusion:** Calibration and Brier scoring filter by `actual_outcome IS NOT NULL`, so early exits are automatically excluded
 - `get_open_trades()` filters `AND exit_type IS NULL` to prevent re-processing
+- `/health` endpoint shows WS connection status and number of monitored positions
 
 ### 10.6 Maker Execution (changed v2.7)
 

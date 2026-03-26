@@ -75,6 +75,7 @@ async def test_health_response_has_all_expected_fields():
         "open_trades",
         "today_trades",
         "uptime_hours",
+        "ws_exit",
     }
     assert expected_keys == set(body.keys())
 

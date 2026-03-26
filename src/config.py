@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     TIER1_DAILY_CAP: int = 20
     TIER1_FEE_RATE: float = 0.0
     MARKET_FETCH_LIMIT: int = 200
+    MARKET_PAGE_SIZE: int = 500          # Markets per API page
+    MARKET_FETCH_PAGES: int = 3          # Number of pages to fetch
     TIER1_EXECUTION_TYPE: str = "maker"
 
     # Tier 2 Config

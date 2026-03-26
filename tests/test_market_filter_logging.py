@@ -31,6 +31,8 @@ class TestMarketFilterLogging:
     async def test_filter_logging_counts(self):
         settings = MagicMock(spec=Settings)
         settings.MARKET_FETCH_LIMIT = 200
+        settings.MARKET_PAGE_SIZE = 500
+        settings.MARKET_FETCH_PAGES = 3
         client = PolymarketClient(settings)
 
         # Use dynamic dates relative to now
@@ -63,6 +65,7 @@ class TestMarketFilterLogging:
                     "market_filter_results",
                     tier=1,
                     total_from_api=3,
+                    total_raw=3,
                     passed=1,
                     filtered_resolution=1,
                     filtered_liquidity=1,

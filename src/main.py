@@ -26,6 +26,7 @@ from src.pipelines.polymarket import PolymarketClient
 from src.pipelines.rss import RSSPipeline
 from src.pipelines.twitter import TwitterDataPipeline
 from src.learning.experiments import get_current_experiment, start_experiment
+from src.engine.ws_exit import RealTimeExitManager
 from src.scheduler import Scheduler
 
 # ---------------------------------------------------------------------------
@@ -149,10 +150,15 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
 
+    # Real-time WebSocket exit manager
+    ws_exit_mgr = RealTimeExitManager(db=db, polymarket_client=polymarket, settings=settings)
+    await ws_exit_mgr.start()
+
     _app_state.update(
         db=db,
         settings=settings,
         scheduler=scheduler,
+        ws_exit_mgr=ws_exit_mgr,
         portfolio=await db.load_portfolio(),
         started_at=time.time(),
     )
@@ -164,6 +170,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     log.info("shutting_down")
     await send_alert(format_lifecycle_alert("STOPPING", settings.ENVIRONMENT), settings)
+    await ws_exit_mgr.stop()
     scheduler.stop()
     await db.close()
     log.info("shutdown_complete")
@@ -203,6 +210,14 @@ async def health():
     if settings:
         mode = settings.ENVIRONMENT
 
+    ws_exit_mgr: RealTimeExitManager = _app_state.get("ws_exit_mgr")
+    ws_info = None
+    if ws_exit_mgr:
+        ws_info = {
+            "connected": ws_exit_mgr._connected,
+            "positions_monitored": len(ws_exit_mgr._active_positions),
+        }
+
     body = {
         "status": "ok" if not stale else "stale",
         "last_scan_completed": last_scan.isoformat() if last_scan else None,
@@ -211,6 +226,7 @@ async def health():
         "open_trades": open_trades,
         "today_trades": today_trades,
         "uptime_hours": round(uptime_hours, 2),
+        "ws_exit": ws_info,
     }
 
     status_code = 200 if not stale else 503
