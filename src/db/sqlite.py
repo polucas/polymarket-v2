@@ -220,6 +220,18 @@ class Database:
         rows = await cursor.fetchall()
         return {r[0] for r in rows}
 
+    async def get_recently_evaluated_market_ids(self, hours: float) -> set:
+        """Return market_ids that had a Grok evaluation (including low_edge SKIPs) within the window."""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        cursor = await self._conn.execute(
+            "SELECT DISTINCT market_id FROM trade_records "
+            "WHERE timestamp >= ? AND grok_raw_probability IS NOT NULL",
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+        return {r[0] for r in rows}
+
     async def get_recent_market_questions(self, hours: float) -> list:
         """Return (market_id, question, market_type) for recently traded markets."""
         from datetime import datetime, timezone, timedelta

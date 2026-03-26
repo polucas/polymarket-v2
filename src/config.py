@@ -59,6 +59,7 @@ class Settings(BaseSettings):
 
     # Duplicate Prevention
     MARKET_COOLDOWN_HOURS: float = 24.0
+    EVALUATION_COOLDOWN_HOURS: float = 2.0  # Skip re-calling Grok on same market within this window
     QUESTION_SIMILARITY_THRESHOLD: float = 0.60
 
     # Alerts

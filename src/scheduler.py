@@ -208,6 +208,7 @@ class Scheduler:
             portfolio = await self._db.load_portfolio()
             open_market_ids = await self._db.get_open_market_ids()
             recently_traded_ids = await self._db.get_recently_traded_market_ids(self._settings.MARKET_COOLDOWN_HOURS)
+            recently_evaluated_ids = await self._db.get_recently_evaluated_market_ids(self._settings.EVALUATION_COOLDOWN_HOURS)
             recent_questions = await self._db.get_recent_market_questions(self._settings.MARKET_COOLDOWN_HOURS)
 
             scan_mode = get_scan_mode(today_trades, self._monk_config)
@@ -259,6 +260,7 @@ class Scheduler:
                         tier=1,
                         open_market_ids=open_market_ids,
                         recently_traded_ids=recently_traded_ids,
+                        recently_evaluated_ids=recently_evaluated_ids,
                         recent_questions=recent_questions,
                     )
                 except Exception as e:
@@ -329,6 +331,7 @@ class Scheduler:
             portfolio = await self._db.load_portfolio()
             open_market_ids = await self._db.get_open_market_ids()
             recently_traded_ids = await self._db.get_recently_traded_market_ids(self._settings.MARKET_COOLDOWN_HOURS)
+            recently_evaluated_ids = await self._db.get_recently_evaluated_market_ids(self._settings.EVALUATION_COOLDOWN_HOURS)
             recent_questions = await self._db.get_recent_market_questions(self._settings.MARKET_COOLDOWN_HOURS)
 
             experiment = await get_current_experiment(self._db)
@@ -361,6 +364,7 @@ class Scheduler:
                         tier=2,
                         open_market_ids=open_market_ids,
                         recently_traded_ids=recently_traded_ids,
+                        recently_evaluated_ids=recently_evaluated_ids,
                         recent_questions=recent_questions,
                     )
                 except Exception as e:
@@ -435,6 +439,7 @@ class Scheduler:
         tier: int,
         open_market_ids: set = frozenset(),
         recently_traded_ids: set = frozenset(),
+        recently_evaluated_ids: set = frozenset(),
         recent_questions: list = None,
     ) -> None:
         # Skip if we already have an open position on this market
@@ -450,6 +455,11 @@ class Scheduler:
             skip_record = self._build_skip_record(market, "market_cooldown", experiment_run, tier)
             await self._db.save_trade(skip_record)
             return
+
+        # Skip if market was recently evaluated by Grok (avoid re-calling LLM on same market)
+        if market.market_id in recently_evaluated_ids:
+            log.info("evaluation_cooldown", market_id=market.market_id)
+            return  # Silent skip — no DB record to avoid bloat
 
         # Skip if a similar question was recently traded (question-similarity dedup)
         if recent_questions:
