@@ -1,4 +1,4 @@
-# Polymarket Prediction System v2.5 — Complete Project Bible
+# Polymarket Prediction System v2.7 — Complete Project Bible
 
 > **Version:** 2.7.1 | **Last updated:** 2026-03-26
 > **Status:** Paper trading (restarted after 2-week pause)
@@ -330,9 +330,9 @@ After=network.target
 Type=simple
 User=botuser
 WorkingDirectory=/home/botuser/polymarket-bot
-Environment=PATH=/home/botuser/polymarket-bot/venv/bin:/usr/bin
-EnvironmentFile=/home/botuser/polymarket-bot/.env
 ExecStart=/home/botuser/polymarket-bot/venv/bin/python -m src.main
+# NOTE: Do NOT use EnvironmentFile — Pydantic reads .env itself.
+# Including EnvironmentFile causes "Extra inputs are not permitted" errors.
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -445,12 +445,12 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| LLM | Grok 4.1 Fast ($0.20/$0.50 per M tokens) | Best reasoning-per-dollar, no refusal on financial predictions |
+| LLM | Grok (`grok-4.20-experimental-beta-0304-reasoning`, configurable via `GROK_MODEL`) | Best reasoning-per-dollar, no refusal on financial predictions |
 | Social data | TwitterAPI.io ($0.15/1K tweets) | Full control over pre-filtering, cheaper than Grok X Search |
 | News data | RSS feeds (AP, Reuters, Bloomberg) | Free, real-time, headline-level sufficient as trigger (see 11.3) |
 | Strategy | Dual-tier (News Sniper + Crypto Opportunist) | Maximizes edge per dollar of OpEx |
 | DB | SQLite | Zero-config, handles concurrency, no JSON race conditions |
-| Order execution | Maker + Taker | Maker for rebates on crypto; taker for speed on news events |
+| Order execution | Maker (both tiers) | LLM latency (2-4s) makes taker non-viable; maker provides liquidity to news-reacting traders (see 10.6) |
 | Paper trading first | Mandatory | Minimum 200 trades before live capital |
 | Signal taxonomy | Two-dimensional (Source Tier × Info Type) | Avoids mixed taxonomy, enables granular learning per market type |
 | Model swap policy | Per-layer reset strategy | Calibration resets, market-type dampens, signals preserved |
@@ -502,7 +502,7 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                   GROK 4.1 FAST (Prediction Engine)               │
+│              GROK (Prediction Engine — configurable model)          │
 │                                                                   │
 │  Single API call per market. Receives MarketContext.               │
 │  Returns structured JSON:                                         │
@@ -550,10 +550,10 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 ┌──────────────────────────────────────────────────────────────────┐
 │                    EXECUTION + RESOLUTION                          │
 │                                                                   │
-│  Paper mode: simulate with slippage                               │
+│  Paper mode: simulate with maker fill probability (40-80%)        │
 │  Live mode: Polymarket CLOB API                                   │
-│    - Tier 1 (event markets): taker orders (speed matters)         │
-│    - Tier 2 (crypto): maker orders (rebate matters)               │
+│    - Both tiers: maker orders (LLM latency makes taker unviable) │
+│    - Config: TIER1_EXECUTION_TYPE, TIER2_EXECUTION_TYPE           │
 │                                                                   │
 │  Auto-resolution:                                                 │
 │    - Crypto 15-min: check price at resolution time                │
@@ -573,10 +573,10 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 | Scan frequency | Every 15 min | Mispricings persist minutes-hours on event markets |
 | Market types | Political, regulatory, economic, cultural, sports | Fee-free on Polymarket |
 | Resolution window | 15 min - 7 days | Polymarket event markets mostly resolve in 1-7 day range; floor at 15 min captures fast-moving markets (see 5.3) |
-| Fee rate | 0% (fee-free markets) | No taker fees on non-crypto, non-sports markets |
+| Fee rate | 0% (`TIER1_FEE_RATE=0.0`) | Fee-free on non-crypto, non-sports markets |
 | Min edge threshold | 3% (`TIER1_MIN_EDGE=0.03`, was 4% pre-v2.6) | Lowered for paper trading volume; increase for live |
 | Min confidence | 65% (adjusted) | Lower start, let Bayesian calibration correct |
-| Execution | Taker orders | Speed > rebate for news-driven moves |
+| Execution | Maker orders (limit) | LLM latency (2-4s) makes taker non-viable; changed in v2.7 (see 10.6) |
 | Max position | 1.6% of bankroll | $160 max bet at $10k bankroll — conservative for event uncertainty |
 | Daily trade cap | 20 | Higher throughput with ranking keeping quality bar |
 
@@ -587,10 +587,10 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 | Scan frequency | Every 2-3 min, ONLY during active news window | Don't compete with latency bots during quiet periods |
 | Market types | BTC/ETH/SOL 15-min price predictions | Only crypto markets |
 | Resolution window | 15 min | Ultra-short |
-| Fee rate | Max 1.56% taker / rebate as maker | Corrected from original 3.15% |
+| Fee rate | 4% (`TIER2_FEE_RATE=0.04`) | Conservative estimate for crypto markets |
 | Min edge threshold | 5% after fees | Higher bar due to fees and competition |
 | Min confidence | 70% (adjusted) | Slightly higher for adversarial environment |
-| Execution | Maker orders (limit) | Earn rebates, avoid taker fees |
+| Execution | Maker orders (limit) | LLM latency makes taker non-viable; same rationale as Tier 1 (see 10.6) |
 | Max position | 5% of bankroll | Smaller due to higher risk |
 | Daily trade cap | 3 | Most days should be 0 |
 | Activation trigger | News Detector finds crypto-relevant breaking news | Don't run blind |
@@ -2037,8 +2037,8 @@ ALTER TABLE trade_records ADD COLUMN exit_price REAL;       -- price at which po
 
 | Component | Daily calls | Cost/call | Daily | Monthly |
 |-----------|-------------|-----------|-------|---------|
-| Grok 4.1 Fast (Tier 1) | ~480 | ~$0.0004 | $0.19 | $5.70 |
-| Grok 4.1 Fast (Tier 2) | ~75 per activation × ~0.43/day avg | ~$0.0004 | $0.013 | $3.60 |
+| Grok (Tier 1) | ~480 | ~$0.0004 | $0.19 | $5.70 |
+| Grok (Tier 2) | ~75 per activation × ~0.43/day avg | ~$0.0004 | $0.013 | $3.60 |
 | Grok (keyword extraction) | ~20 (cache miss) | ~$0.0002 | $0.004 | $0.12 |
 | TwitterAPI.io (Tier 1) | ~48 searches | ~$0.0075 | $0.36 | $10.80 |
 | TwitterAPI.io (Tier 2) | ~15 per activation × ~0.43/day avg | ~$0.0075 | $0.048 | $1.44 |
@@ -2348,7 +2348,7 @@ Telegram bot for real-time notifications. Implemented in `src/alerts.py` with 9 
 8. Source tier classifier (S1-S6) + `known_sources.yaml`
 9. RSS pipeline with source tier classification + bounded headline cache
 10. Context builder (with info-type classification prompt)
-11. Grok 4.1 Fast client (JSON parsing with retry — Section 11.5)
+11. Grok client (JSON parsing with retry — Section 11.5)
 12. Basic Tier 1 scanner (every 15 min)
 13. Correlated market detection (Section 10.2)
 14. Trade ranker (score + rank per cycle, cluster limit check)
