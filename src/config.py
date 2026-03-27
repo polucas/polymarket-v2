@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     KELLY_FRACTION: float = 0.25
     MAX_CLUSTER_EXPOSURE_PCT: float = 0.12
 
+    # Market Price Filter
+    MIN_TRADEABLE_PRICE: float = 0.05   # Skip markets with YES < 5%
+    MAX_TRADEABLE_PRICE: float = 0.95   # Skip markets with YES > 95%
+
     # Duplicate Prevention
     MARKET_COOLDOWN_HOURS: float = 24.0
     EVALUATION_COOLDOWN_HOURS: float = 2.0  # Skip re-calling Grok on same market within this window

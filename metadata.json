@@ -6,41 +6,77 @@
         "trade_records": { "sort_desc": "timestamp" }
       },
       "queries": {
+        "performance_summary": {
+          "title": "Performance Summary",
+          "sql": "SELECT COUNT(*) as total_trades, SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losses, SUM(CASE WHEN pnl = 0 OR pnl IS NULL THEN 1 ELSE 0 END) as pending, ROUND(SUM(CASE WHEN pnl > 0 THEN 1.0 ELSE 0 END) * 100.0 / NULLIF(SUM(CASE WHEN pnl IS NOT NULL THEN 1 ELSE 0 END), 0), 1) as win_rate_pct, ROUND(SUM(pnl), 2) as total_pnl, ROUND(AVG(pnl), 2) as avg_pnl, ROUND(AVG(position_size_usd), 2) as avg_position_size, ROUND(AVG(calculated_edge), 4) as avg_edge FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO')"
+        },
+        "pnl_by_exit_type": {
+          "title": "PnL by Exit Type",
+          "sql": "SELECT COALESCE(exit_type, CASE WHEN actual_outcome IS NOT NULL THEN 'resolution' ELSE 'open' END) as exit_type, COUNT(*) as trades, SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins, ROUND(SUM(pnl), 2) as total_pnl, ROUND(AVG(pnl), 2) as avg_pnl FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO') GROUP BY exit_type ORDER BY total_pnl DESC"
+        },
+        "pnl_by_action": {
+          "title": "PnL by Action (BUY_YES vs BUY_NO)",
+          "sql": "SELECT action, COUNT(*) as trades, SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins, ROUND(SUM(CASE WHEN pnl > 0 THEN 1.0 ELSE 0 END) * 100.0 / NULLIF(SUM(CASE WHEN pnl IS NOT NULL THEN 1 ELSE 0 END), 0), 1) as win_rate_pct, ROUND(SUM(pnl), 2) as total_pnl, ROUND(AVG(pnl), 2) as avg_pnl, ROUND(AVG(position_size_usd), 2) as avg_position FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO') GROUP BY action"
+        },
+        "pnl_by_market_type": {
+          "title": "PnL by Market Type",
+          "sql": "SELECT market_type, COUNT(*) as trades, SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins, ROUND(SUM(CASE WHEN pnl > 0 THEN 1.0 ELSE 0 END) * 100.0 / NULLIF(SUM(CASE WHEN pnl IS NOT NULL THEN 1 ELSE 0 END), 0), 1) as win_rate_pct, ROUND(SUM(pnl), 2) as total_pnl, ROUND(AVG(pnl), 2) as avg_pnl FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO') GROUP BY market_type ORDER BY total_pnl DESC"
+        },
+        "top_wins": {
+          "title": "Top 10 Wins",
+          "sql": "SELECT timestamp, SUBSTR(market_question, 1, 80) as question, action, ROUND(market_price_at_decision, 4) as entry_price, ROUND(exit_price, 4) as exit_price, ROUND(position_size_usd, 2) as size_usd, ROUND(pnl, 2) as pnl, exit_type FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO') AND pnl > 0 ORDER BY pnl DESC LIMIT 10"
+        },
+        "top_losses": {
+          "title": "Top 10 Losses",
+          "sql": "SELECT timestamp, SUBSTR(market_question, 1, 80) as question, action, ROUND(market_price_at_decision, 4) as entry_price, ROUND(exit_price, 4) as exit_price, ROUND(position_size_usd, 2) as size_usd, ROUND(pnl, 2) as pnl, exit_type FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO') AND pnl < 0 ORDER BY pnl ASC LIMIT 10"
+        },
+        "active_positions": {
+          "title": "Active Positions (Open Trades)",
+          "sql": "SELECT timestamp, SUBSTR(market_question, 1, 80) as question, action, market_type, ROUND(market_price_at_decision, 4) as entry_price, ROUND(position_size_usd, 2) as size_usd, ROUND(calculated_edge, 4) as edge, datetime(resolution_datetime) as resolves_at FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO') AND exit_type IS NULL AND actual_outcome IS NULL ORDER BY timestamp DESC"
+        },
+        "trade_log": {
+          "title": "Trade Log (Simplified)",
+          "sql": "SELECT timestamp, SUBSTR(market_question, 1, 60) as question, market_type, action, ROUND(market_price_at_decision, 3) as price, ROUND(calculated_edge, 3) as edge, ROUND(position_size_usd, 2) as size, ROUND(pnl, 2) as pnl, exit_type FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO') ORDER BY timestamp DESC"
+        },
+        "hourly_distribution": {
+          "title": "Hourly Trade Distribution (UTC)",
+          "sql": "SELECT CAST(strftime('%H', timestamp) AS INTEGER) as hour_utc, COUNT(*) as trades, SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins, ROUND(SUM(pnl), 2) as total_pnl FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO') GROUP BY hour_utc ORDER BY hour_utc"
+        },
         "todays_trades": {
-          "title": "Today's trades",
-          "sql": "SELECT timestamp, datetime(resolution_datetime) as resolves_at, resolution_window_hours as hours_til_resolution, market_question, market_type, action, ROUND(calculated_edge,4) as edge, ROUND(trade_score,4) as score, position_size_usd, pnl, actual_outcome FROM trade_records WHERE date(timestamp) = date('now') AND action IN ('BUY_YES', 'BUY_NO') ORDER BY timestamp DESC"
+          "title": "Today's Trades",
+          "sql": "SELECT timestamp, datetime(resolution_datetime) as resolves_at, resolution_window_hours as hours_til_resolution, SUBSTR(market_question, 1, 60) as question, market_type, action, ROUND(calculated_edge,4) as edge, ROUND(trade_score,4) as score, ROUND(position_size_usd, 2) as size, ROUND(pnl, 2) as pnl, exit_type FROM trade_records WHERE date(timestamp) = date('now') AND action IN ('BUY_YES', 'BUY_NO') ORDER BY timestamp DESC"
         },
         "portfolio_overview": {
-          "title": "Portfolio overview",
-          "sql": "SELECT cash_balance, total_equity, total_pnl, peak_equity, max_drawdown, ROUND(max_drawdown / peak_equity * 100, 1) as drawdown_pct FROM portfolio"
+          "title": "Portfolio Overview",
+          "sql": "SELECT ROUND(cash_balance, 2) as cash_balance, ROUND(total_equity, 2) as total_equity, ROUND(total_pnl, 2) as total_pnl, ROUND(peak_equity, 2) as peak_equity, ROUND(max_drawdown, 4) as max_drawdown, ROUND(max_drawdown * 100, 1) as drawdown_pct FROM portfolio"
         },
         "brier_by_market_type": {
-          "title": "Brier score by market type (last 30d)",
+          "title": "Brier Score by Market Type (last 30d)",
           "sql": "SELECT market_type, COUNT(*) as trades, ROUND(AVG(brier_score_raw), 3) as avg_brier_raw, ROUND(AVG(brier_score_adjusted), 3) as avg_brier_adjusted, ROUND(AVG(brier_score_raw) - AVG(brier_score_adjusted), 3) as learning_improvement, ROUND(SUM(pnl), 2) as total_pnl FROM trade_records WHERE brier_score_adjusted IS NOT NULL AND timestamp > datetime('now', '-30 days') GROUP BY market_type"
         },
         "calibration_state": {
-          "title": "Calibration bucket state",
+          "title": "Calibration Bucket State",
           "sql": "SELECT bucket_range, ROUND(alpha / (alpha + beta), 3) as expected_accuracy, CAST(alpha + beta - 2 AS INTEGER) as sample_count FROM calibration_state"
         },
         "signal_tracker_lift": {
-          "title": "Signal tracker lift",
+          "title": "Signal Tracker Lift",
           "sql": "SELECT source_tier, info_type, market_type, present_winning + present_losing as total_present, CASE WHEN (present_winning + present_losing) >= 5 AND (absent_winning + absent_losing) >= 5 THEN ROUND(CAST(present_winning AS REAL) / (present_winning + present_losing) / (CAST(absent_winning AS REAL) / (absent_winning + absent_losing)), 3) ELSE NULL END as lift FROM signal_trackers ORDER BY lift DESC"
         },
         "daily_api_costs": {
-          "title": "Daily API costs",
+          "title": "Daily API Costs",
           "sql": "SELECT date, service, calls, ROUND(cost_usd, 4) as cost FROM api_costs ORDER BY date DESC, service"
         },
-        "counterfactual_analysis": {
-          "title": "Counterfactual: would skipped trades have been profitable?",
-          "sql": "SELECT market_type, COUNT(*) as skipped, ROUND(SUM(counterfactual_pnl), 2) as missed_pnl FROM market_type_performance WHERE total_observed > 0"
-        },
         "model_comparison": {
-          "title": "Model comparison",
+          "title": "Model Comparison",
           "sql": "SELECT run_id, model_used, total_trades, ROUND(total_pnl, 2) as pnl, ROUND(avg_brier, 3) as brier FROM experiment_runs ORDER BY started_at DESC"
         },
         "headline_only_analysis": {
-          "title": "Headline-only signal analysis",
+          "title": "Headline-only Signal Analysis",
           "sql": "SELECT headline_only_signal, COUNT(*) as trades, ROUND(AVG(brier_score_adjusted), 3) as avg_brier, ROUND(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as win_pct FROM trade_records WHERE brier_score_adjusted IS NOT NULL GROUP BY headline_only_signal"
+        },
+        "skip_reasons": {
+          "title": "Skip Reason Breakdown (Today)",
+          "sql": "SELECT skip_reason, COUNT(*) as count FROM trade_records WHERE action = 'SKIP' AND date(timestamp) = date('now') AND skip_reason IS NOT NULL GROUP BY skip_reason ORDER BY count DESC"
         }
       }
     }

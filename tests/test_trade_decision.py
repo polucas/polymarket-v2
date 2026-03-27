@@ -153,12 +153,13 @@ class TestKellySizeBuyYes:
         f* = (0.80-0.60)/(1-0.60) = 0.50
         quarter Kelly = 0.50*0.25 = 0.125
         raw size = 0.125*5000 = 625
-        cap = 0.08*5000 = 400
-        -> 400
+        USD cap = 0.08*5000 = 400
+        notional cap: max_payout = 400/0.60 = 666.7 > 400
+        -> position = 400 * 0.60 = 240
         """
         result = kelly_size(0.80, 0.60, "BUY_YES", 5000.0,
                             kelly_fraction=0.25, max_position_pct=0.08)
-        assert pytest.approx(result, abs=1e-2) == 400.0
+        assert pytest.approx(result, abs=1e-2) == 240.0
 
     def test_small_edge(self):
         """prob=0.65, price=0.60, bankroll=5000
@@ -188,11 +189,13 @@ class TestKellySizeBuyNo:
         f* = (0.60-0.30)/0.60 = 0.50
         quarter = 0.50*0.25 = 0.125
         raw = 625
-        cap = 400 -> 400
+        USD cap = 400
+        notional cap: max_payout = 400/0.40 = 1000 > 400
+        -> position = 400 * 0.40 = 160
         """
         result = kelly_size(0.30, 0.60, "BUY_NO", 5000.0,
                             kelly_fraction=0.25, max_position_pct=0.08)
-        assert pytest.approx(result, abs=1e-2) == 400.0
+        assert pytest.approx(result, abs=1e-2) == 160.0
 
     def test_moderate_edge(self):
         """prob=0.55, price=0.60, bankroll=5000
@@ -354,6 +357,80 @@ class TestKellySizeEdgeCases:
         result = kelly_size(0.80, 0.60, "BUY_YES", 5000.0,
                             kelly_fraction=0.25, max_position_pct=0.0)
         assert result == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Notional exposure cap tests
+# ---------------------------------------------------------------------------
+
+class TestNotionalExposureCap:
+
+    def test_buy_no_extreme_price_capped(self):
+        """BUY_NO at YES=0.95 (NO=0.05). Without notional cap, $400 buys
+        8000 shares with max payout $8000. Cap should reduce position so
+        max payout <= max_position_pct * bankroll = $400."""
+        result = kelly_size(0.30, 0.95, "BUY_NO", 5000.0,
+                            kelly_fraction=0.25, max_position_pct=0.08)
+        # max_position = 0.08 * 5000 = 400
+        # At NO price 0.05: max_payout = position / 0.05
+        # Cap: position = 400 * 0.05 = 20
+        assert result == pytest.approx(20.0, abs=1e-2)
+
+    def test_buy_yes_extreme_price_capped(self):
+        """BUY_YES at YES=0.05. Without notional cap, $400 buys
+        8000 shares with max payout $8000. Cap should reduce position."""
+        result = kelly_size(0.70, 0.05, "BUY_YES", 5000.0,
+                            kelly_fraction=0.25, max_position_pct=0.08)
+        # max_position = 400
+        # At YES price 0.05: max_payout = position / 0.05
+        # Cap: position = 400 * 0.05 = 20
+        assert result == pytest.approx(20.0, abs=1e-2)
+
+    def test_midrange_price_not_capped(self):
+        """BUY_YES at YES=0.50. max_payout = position / 0.50 = 2x position.
+        With max_position=400, max_payout=800 > 400 -> cap applies but
+        position = 400 * 0.50 = 200. However the raw kelly is smaller."""
+        result = kelly_size(0.65, 0.60, "BUY_YES", 5000.0,
+                            kelly_fraction=0.25, max_position_pct=0.08)
+        # f* = (0.65-0.60)/(1-0.60) = 0.125
+        # quarter Kelly = 0.125*0.25 = 0.03125
+        # raw = 0.03125*5000 = 156.25
+        # max_position = 400, so position = 156.25 (not hit)
+        # max_payout = 156.25 / 0.60 = 260.4 < 400 -> no notional cap
+        assert result == pytest.approx(156.25, abs=1e-2)
+
+    def test_buy_no_midrange_not_affected(self):
+        """BUY_NO at YES=0.60 (NO=0.40). max_payout = position / 0.40 = 2.5x.
+        Small position won't hit cap."""
+        result = kelly_size(0.30, 0.60, "BUY_NO", 5000.0,
+                            kelly_fraction=0.25, max_position_pct=0.08)
+        # f* = (0.60-0.30)/0.60 = 0.50
+        # quarter = 0.125, raw = 625
+        # capped at 400 (USD cap)
+        # max_payout = 400 / 0.40 = 1000 > 400 -> notional cap fires
+        # position = 400 * 0.40 = 160
+        assert result == pytest.approx(160.0, abs=1e-2)
+
+    def test_notional_cap_max_payout_bounded(self):
+        """Verify the invariant: max payout never exceeds max_position_pct * bankroll."""
+        for price in [0.05, 0.10, 0.20, 0.50, 0.80, 0.90, 0.95]:
+            bankroll = 10000.0
+            max_pct = 0.016
+            max_position = max_pct * bankroll  # $160
+            # BUY_NO
+            size_no = kelly_size(0.01, price, "BUY_NO", bankroll,
+                                 kelly_fraction=0.25, max_position_pct=max_pct)
+            if size_no > 0 and (1.0 - price) > 0:
+                max_payout_no = size_no / (1.0 - price)
+                assert max_payout_no <= max_position + 0.01, (
+                    f"BUY_NO at {price}: payout {max_payout_no} > cap {max_position}")
+            # BUY_YES
+            size_yes = kelly_size(0.99, price, "BUY_YES", bankroll,
+                                  kelly_fraction=0.25, max_position_pct=max_pct)
+            if size_yes > 0 and price > 0:
+                max_payout_yes = size_yes / price
+                assert max_payout_yes <= max_position + 0.01, (
+                    f"BUY_YES at {price}: payout {max_payout_yes} > cap {max_position}")
 
 
 # ---------------------------------------------------------------------------

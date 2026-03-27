@@ -76,6 +76,7 @@ class PolymarketClient:
         total_parsed = 0
         filtered_resolution = 0
         filtered_liquidity = 0
+        filtered_price_range = 0
         for m in all_raw:
             try:
                 # Parse prices
@@ -160,6 +161,11 @@ class PolymarketClient:
                     if market_type != "crypto_15m":
                         continue
 
+                # Price range filter — extreme prices create dangerous leverage
+                if yes_price > self._settings.MAX_TRADEABLE_PRICE or yes_price < self._settings.MIN_TRADEABLE_PRICE:
+                    filtered_price_range += 1
+                    continue
+
                 markets.append(market)
             except Exception as e:
                 log.warning("market_parse_error", error=str(e), market_id=m.get("id"))
@@ -171,7 +177,8 @@ class PolymarketClient:
                  total_raw=len(all_raw),
                  passed=len(markets),
                  filtered_resolution=filtered_resolution,
-                 filtered_liquidity=filtered_liquidity)
+                 filtered_liquidity=filtered_liquidity,
+                 filtered_price_range=filtered_price_range)
         return markets
 
     async def get_orderbook(self, token_id: str, market_id: str = "") -> OrderBook:

@@ -94,6 +94,10 @@ docs/
 
 **VWAP Kelly sizing:** Kelly position size is capped by profitable orderbook depth. `kelly_size_vwap()` walks the orderbook levels, computes volume-weighted average price, and binary-searches for the maximum size where VWAP still gives edge above `TIER1_MIN_EDGE`. Prevents oversizing into thin books.
 
+**Extreme price guards:** Two layers prevent leverage explosions at extreme prices (e.g., BUY_NO at YES=0.9995 buying millions of shares for a few dollars):
+1. **Market price filter** (`MIN_TRADEABLE_PRICE=0.05`, `MAX_TRADEABLE_PRICE=0.95`): Markets where one side is <5% are skipped during market fetch. Applied in `get_active_markets()` after resolution and liquidity filters.
+2. **Notional exposure cap** in `kelly_size()`: Max possible payout (position / share_price) is capped at `MAX_POSITION_PCT * bankroll`. A single trade can never win more than the position cap. This prevents leverage from extreme prices (buying at $0.05/share) from creating outsized payouts.
+
 **Maker execution:** Both Tier 1 and Tier 2 use maker (limit) orders (`TIER1_EXECUTION_TYPE=maker`). Paper mode simulates fill probability 40-80% with zero slippage. This acknowledges that LLM inference latency (2-4s) makes taker sniping non-viable.
 
 **Early exit (TP/SL):** Real-time WebSocket monitoring (`src/engine/ws_exit.py`) subscribes to Polymarket's market channel for YES tokens of open positions. On book update, best bid is checked against TP (+20% ROI) and SL (-15% ROI) thresholds for instant exit. The 5-min polling loop (`check_early_exits()`) is kept as fallback when WS is disconnected. Early-exited trades have PnL but no `actual_outcome` — excluded from Brier/calibration metrics. Feature flag: `EARLY_EXIT_ENABLED`.
@@ -109,6 +113,7 @@ docs/
 - **Tier 1:** 15-min scan interval, resolution 15min-7d, 20 trades/day cap, 0% fee, 3% min edge
 - **Tier 2:** 2-3 min scan (only during active news window), 15-min resolution, 3 trades/day cap
 - **Market fetch:** 3 pages x 500 markets sorted by volume (`MARKET_PAGE_SIZE=500`, `MARKET_FETCH_PAGES=3`) = up to 1,500 most active markets per scan
+- **Price filter:** Skip markets outside 5%-95% YES range (`MIN_TRADEABLE_PRICE=0.05`, `MAX_TRADEABLE_PRICE=0.95`)
 - **API budget:** $15/day (`DAILY_API_BUDGET_USD=15.0`)
 - **Duplicate prevention:** 24h market cooldown, 2h evaluation cooldown, 60% question similarity threshold
 - **Environment:** `ENVIRONMENT=paper` (start here) or `live`
@@ -145,4 +150,4 @@ docs/
 - **VWAP returns price, not 1.0:** `compute_vwap()` returns `total_usd / total_shares` — the volume-weighted average *price* per share, not a USD ratio. VWAP is used in `kelly_size_vwap()` to cap position size at the depth where the trade remains profitable.
 - **RSS accumulator lock:** `poll_and_accumulate()` uses an `asyncio.Lock` to prevent race conditions with `consume_signals()`. The lock is per-instance, not global.
 - **WebSocket exit manager:** `RealTimeExitManager` in `src/engine/ws_exit.py` subscribes to YES tokens of open positions on the Polymarket market channel (`wss://ws-subscriptions-clob.polymarket.com/ws/market`). It calculates ROI from the best bid (sell price) and triggers instant TP/SL exits. The 5-min polling fallback in `check_early_exits()` catches anything missed during WS disconnects. Positions are tracked by `clob_token_id_yes` (stored in TradeRecord since migration v6).
-- **Pagination settings for mocked tests:** Tests that mock `Settings` with `spec=Settings` must set `MARKET_PAGE_SIZE` and `MARKET_FETCH_PAGES` in addition to `MARKET_FETCH_LIMIT` for any test calling `get_active_markets()`.
+- **Pagination settings for mocked tests:** Tests that mock `Settings` with `spec=Settings` must set `MARKET_PAGE_SIZE`, `MARKET_FETCH_PAGES`, `MIN_TRADEABLE_PRICE`, and `MAX_TRADEABLE_PRICE` in addition to `MARKET_FETCH_LIMIT` for any test calling `get_active_markets()`.

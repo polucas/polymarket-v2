@@ -66,6 +66,8 @@ def _build_scheduler() -> Scheduler:
     settings.MARKET_FETCH_LIMIT = 200
     settings.MARKET_PAGE_SIZE = 500
     settings.MARKET_FETCH_PAGES = 3
+    settings.MIN_TRADEABLE_PRICE = 0.05
+    settings.MAX_TRADEABLE_PRICE = 0.95
     settings.RSS_POLL_INTERVAL_SECONDS = 30
     settings.TIER1_EXECUTION_TYPE = "maker"
     settings.TIER2_EXECUTION_TYPE = "maker"

@@ -415,6 +415,8 @@ class TestPagination:
             POLYMARKET_API_KEY="test-pm-key",
             MARKET_PAGE_SIZE=300,
             MARKET_FETCH_PAGES=1,
+            MIN_TRADEABLE_PRICE=0.05,
+            MAX_TRADEABLE_PRICE=0.95,
         )
         client = PolymarketClient(settings)
 
@@ -441,6 +443,8 @@ class TestPagination:
             POLYMARKET_API_KEY="test-pm-key",
             MARKET_PAGE_SIZE=2,
             MARKET_FETCH_PAGES=3,
+            MIN_TRADEABLE_PRICE=0.05,
+            MAX_TRADEABLE_PRICE=0.95,
         )
         client = PolymarketClient(settings)
 
@@ -478,6 +482,8 @@ class TestPagination:
             POLYMARKET_API_KEY="test-pm-key",
             MARKET_PAGE_SIZE=2,
             MARKET_FETCH_PAGES=3,
+            MIN_TRADEABLE_PRICE=0.05,
+            MAX_TRADEABLE_PRICE=0.95,
         )
         client = PolymarketClient(settings)
 
@@ -499,3 +505,126 @@ class TestPagination:
 
         # Should still have the 2 markets from page 1
         assert len(markets) == 2
+
+
+# ---------------------------------------------------------------------------
+# Price range filter — extreme prices
+# ---------------------------------------------------------------------------
+
+
+class TestPriceRangeFilter:
+    @pytest.mark.asyncio
+    async def test_extreme_high_price_filtered(self):
+        """Markets with YES > 0.95 should be filtered out."""
+        raw = [
+            _make_raw_market(
+                id="high-price",
+                question="Will BTC hit $100k?",
+                outcome_prices=[0.97, 0.03],
+                hours_ahead=6.0,
+                liquidity=10_000,
+            ),
+        ]
+        mock_resp = _mock_response(json_data=raw)
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_resp)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        settings = _make_settings()
+        client = PolymarketClient(settings)
+
+        with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
+            markets = await client.get_active_markets(tier=1)
+
+        assert len(markets) == 0
+
+    @pytest.mark.asyncio
+    async def test_extreme_low_price_filtered(self):
+        """Markets with YES < 0.05 should be filtered out."""
+        raw = [
+            _make_raw_market(
+                id="low-price",
+                question="Will BTC hit $100k?",
+                outcome_prices=[0.02, 0.98],
+                hours_ahead=6.0,
+                liquidity=10_000,
+            ),
+        ]
+        mock_resp = _mock_response(json_data=raw)
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_resp)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        settings = _make_settings()
+        client = PolymarketClient(settings)
+
+        with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
+            markets = await client.get_active_markets(tier=1)
+
+        assert len(markets) == 0
+
+    @pytest.mark.asyncio
+    async def test_boundary_prices_pass(self):
+        """Markets at exactly 0.05 and 0.95 should pass (boundary)."""
+        raw = [
+            _make_raw_market(
+                id="low-boundary",
+                question="Will BTC hit $100k?",
+                outcome_prices=[0.05, 0.95],
+                hours_ahead=6.0,
+                liquidity=10_000,
+            ),
+            _make_raw_market(
+                id="high-boundary",
+                question="Will ETH hit $10k?",
+                outcome_prices=[0.95, 0.05],
+                hours_ahead=6.0,
+                liquidity=10_000,
+            ),
+        ]
+        mock_resp = _mock_response(json_data=raw)
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_resp)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        settings = _make_settings()
+        client = PolymarketClient(settings)
+
+        with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
+            markets = await client.get_active_markets(tier=1)
+
+        assert len(markets) == 2
+        market_ids = {m.market_id for m in markets}
+        assert "low-boundary" in market_ids
+        assert "high-boundary" in market_ids
+
+    @pytest.mark.asyncio
+    async def test_normal_price_passes(self):
+        """Markets with YES=0.55 should pass the filter."""
+        raw = [
+            _make_raw_market(
+                id="normal-price",
+                question="Will BTC hit $100k?",
+                outcome_prices=[0.55, 0.45],
+                hours_ahead=6.0,
+                liquidity=10_000,
+            ),
+        ]
+        mock_resp = _mock_response(json_data=raw)
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_resp)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        settings = _make_settings()
+        client = PolymarketClient(settings)
+
+        with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
+            markets = await client.get_active_markets(tier=1)
+
+        assert len(markets) == 1
+        assert markets[0].market_id == "normal-price"
+        assert markets[0].yes_price == pytest.approx(0.55)

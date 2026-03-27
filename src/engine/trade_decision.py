@@ -167,9 +167,22 @@ def kelly_size(
 
     # Apply fractional Kelly
     position = f_star * kelly_fraction * bankroll
-    # Cap at max position
+    # Cap at max position (USD spent)
     max_position = max_position_pct * bankroll
-    return min(position, max_position)
+    position = min(position, max_position)
+
+    # Cap by notional exposure (max possible payout)
+    # At extreme prices, small USD amounts buy huge share counts
+    if side == "BUY_YES" and market_price > 0:
+        max_payout = position / market_price
+    elif side == "BUY_NO" and market_price < 1.0:
+        max_payout = position / (1.0 - market_price)
+    else:
+        max_payout = position
+    if max_payout > max_position:
+        position = max_position * (market_price if side == "BUY_YES" else (1.0 - market_price))
+
+    return position
 
 
 def check_monk_mode(
