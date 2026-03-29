@@ -85,6 +85,43 @@ async def cmd_recalculate_learning(args):
         await db.close()
 
 
+async def cmd_run_backtest(args):
+    from datetime import datetime, timezone
+    from src.config import get_settings
+    from src.backtest.runner import BacktestRunner
+    from src.backtest.data_ingestion import init_backtest_db, scrape_polymarket_markets, download_gdelt_news
+
+    settings = get_settings()
+
+    backtest_data_db = "data/backtest_data.db"
+    outputs_db = "data/backtest_outputs.db"
+    grok_cache_db = "data/backtest_grok_cache.db"
+
+    if args.ingest:
+        print(f"Ingesting Polymarket historical markets (max {args.max_markets})...")
+        init_backtest_db(backtest_data_db)
+        count = await scrape_polymarket_markets(backtest_data_db, max_markets=args.max_markets)
+        print(f"  Scraped {count} markets.")
+
+        domains = [d.strip() for d in args.domains.split(",")]
+        print(f"Downloading GDELT news ({args.start_date} to {args.end_date}, domains: {domains})...")
+        news_count = await download_gdelt_news(backtest_data_db, args.start_date, args.end_date, domains=domains)
+        print(f"  Downloaded {news_count} news rows.")
+
+    start_dt = datetime.strptime(args.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    end_dt = datetime.strptime(args.end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+    runner = BacktestRunner(
+        settings=settings,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        backtest_data_db=backtest_data_db,
+        outputs_db=outputs_db,
+        grok_cache_db=grok_cache_db,
+    )
+    await runner.run()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Polymarket v2 Management CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -112,6 +149,14 @@ def main():
     # recalculate_learning
     sub.add_parser("recalculate_learning", help="Recalculate all learning from scratch")
 
+    # run_backtest
+    p_backtest = sub.add_parser("run_backtest", help="Run historical backtest")
+    p_backtest.add_argument("--start-date", required=True, help="Start date YYYY-MM-DD")
+    p_backtest.add_argument("--end-date", required=True, help="End date YYYY-MM-DD")
+    p_backtest.add_argument("--ingest", action="store_true", help="Fetch historical data before running")
+    p_backtest.add_argument("--max-markets", type=int, default=5000, help="Max markets to scrape (default 5000)")
+    p_backtest.add_argument("--domains", default="reuters.com,apnews.com,bbc.com,bloomberg.com,coindesk.com", help="Comma-separated GDELT domain filter")
+
     args = parser.parse_args()
 
     cmd_map = {
@@ -120,6 +165,7 @@ def main():
         "start_experiment": cmd_start_experiment,
         "end_experiment": cmd_end_experiment,
         "recalculate_learning": cmd_recalculate_learning,
+        "run_backtest": cmd_run_backtest,
     }
 
     asyncio.run(cmd_map[args.command](args))

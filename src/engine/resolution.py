@@ -5,6 +5,7 @@ from typing import Optional
 
 import structlog
 
+from src.backtest.clock import Clock
 from src.db.sqlite import Database
 from src.models import Portfolio, TradeRecord
 
@@ -53,7 +54,7 @@ async def auto_resolve_trades(db: Database, polymarket_client) -> None:
             if not market.resolved:
                 # For crypto_15m: check if past expected resolution time
                 if trade.market_type == "crypto_15m":
-                    now = datetime.now(timezone.utc)
+                    now = Clock.utcnow()
                     expected_resolution = trade.timestamp.replace(tzinfo=timezone.utc) if trade.timestamp.tzinfo is None else trade.timestamp
                     expected_resolution = expected_resolution + __import__('datetime').timedelta(hours=trade.resolution_window_hours)
                     if now < expected_resolution:
@@ -78,7 +79,7 @@ async def auto_resolve_trades(db: Database, polymarket_client) -> None:
             trade.pnl = pnl
             trade.brier_score_raw = brier_raw
             trade.brier_score_adjusted = brier_adjusted
-            trade.resolved_at = datetime.now(timezone.utc)
+            trade.resolved_at = Clock.utcnow()
 
             await db.update_trade(trade)
 
@@ -189,7 +190,7 @@ async def check_early_exits(
             trade.exit_type = exit_type
             trade.exit_price = current_price
             trade.pnl = pnl
-            trade.resolved_at = datetime.now(timezone.utc)
+            trade.resolved_at = Clock.utcnow()
             # Do NOT set actual_outcome — the event hasn't resolved yet
 
             await db.update_trade(trade)

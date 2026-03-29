@@ -7,6 +7,7 @@ from typing import List, Optional
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from src.backtest.clock import Clock
 from src.alerts import (
     format_error_alert,
     format_monk_mode_alert,
@@ -197,7 +198,7 @@ class Scheduler:
         log.info("tier1_scan_start")
         try:
             # Reset observe-only alert flag at start of new day
-            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today_str = Clock.utcnow().strftime("%Y-%m-%d")
             if self._observe_only_alert_date != today_str:
                 self._observe_only_alerted_today = False
                 self._observe_only_alert_date = today_str
@@ -233,7 +234,7 @@ class Scheduler:
             )
             if not markets:
                 log.info("no_tier1_markets")
-                self.last_scan_completed = datetime.now(timezone.utc)
+                self.last_scan_completed = Clock.utcnow()
                 return
 
             # Collect all signals from RSS for breaking news (accumulated by _poll_rss)
@@ -309,7 +310,7 @@ class Scheduler:
                 for skip in to_skip:
                     await self._record_skip(skip, experiment_run)
 
-            self.last_scan_completed = datetime.now(timezone.utc)
+            self.last_scan_completed = Clock.utcnow()
             log.info("tier1_scan_complete",
                      markets_scanned=len(markets),
                      candidates=len(candidates))
@@ -411,7 +412,7 @@ class Scheduler:
                     await self._record_skip(skip, experiment_run)
 
             # Check deactivation: no new crypto signals for 30 min
-            now = datetime.now(timezone.utc)
+            now = Clock.utcnow()
             if self._tier2_last_signal:
                 minutes_since = (now - self._tier2_last_signal).total_seconds() / 60
                 if minutes_since > 30:
@@ -499,7 +500,7 @@ class Scheduler:
 
         # Update tier2 last signal time if crypto signals found
         if tier == 2 and (twitter_signals or relevant_rss):
-            self._tier2_last_signal = datetime.now(timezone.utc)
+            self._tier2_last_signal = Clock.utcnow()
 
         # Observe-only mode: record as SKIP
         if scan_mode == "observe_only":
@@ -645,7 +646,7 @@ class Scheduler:
         return TradeRecord(
             record_id=str(uuid.uuid4()),
             experiment_run=experiment_run,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=Clock.utcnow(),
             model_used=self._settings.GROK_MODEL,
             market_id=market.market_id,
             market_question=market.question,
@@ -669,7 +670,7 @@ class Scheduler:
         record = TradeRecord(
             record_id=str(uuid.uuid4()),
             experiment_run=experiment_run,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=Clock.utcnow(),
             model_used=self._settings.GROK_MODEL,
             market_id=candidate.market.market_id,
             market_question=candidate.market.question,
@@ -704,7 +705,7 @@ class Scheduler:
         if self._tier2_active:
             return
         self._tier2_active = True
-        self._tier2_last_signal = datetime.now(timezone.utc)
+        self._tier2_last_signal = Clock.utcnow()
         self._scheduler.add_job(
             self.run_tier2_scan,
             "interval",
@@ -747,7 +748,7 @@ class Scheduler:
         try:
             if self.last_scan_completed is None:
                 return  # Still initializing
-            now = datetime.now(timezone.utc)
+            now = Clock.utcnow()
             minutes_since = (now - self.last_scan_completed).total_seconds() / 60
             if minutes_since > 30:
                 await send_alert(

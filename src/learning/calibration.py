@@ -42,7 +42,8 @@ class CalibrationManager:
         was_correct = raw_predicted_yes == record.actual_outcome
         
         # Recency weight: more recent trades matter more
-        now = datetime.now(timezone.utc)
+        from src.backtest.clock import Clock
+        now = Clock.utcnow()
         if record.timestamp.tzinfo is None:
             days_since = (now.replace(tzinfo=None) - record.timestamp).total_seconds() / 86400
         else:

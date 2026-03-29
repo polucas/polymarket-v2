@@ -121,7 +121,8 @@ async def execute_trade(
     await db.save_portfolio(portfolio)
 
     # Create trade record
-    now = datetime.now(timezone.utc)
+    from src.backtest.clock import Clock
+    now = Clock.utcnow()
     record = TradeRecord(
         record_id=str(uuid.uuid4()),
         experiment_run=experiment_run,

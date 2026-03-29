@@ -77,7 +77,8 @@ def adjust_prediction(
     # signal_tags now include real timestamps from signal objects, so decay actually fires.
     # Previously tags came from Grok's signal_info_types (no timestamps) — decay was dead code.
     params = _DECAY_PARAMS.get(market_type, _DECAY_PARAMS["_default"])
-    now = datetime.now(timezone.utc)
+    from src.backtest.clock import Clock
+    now = Clock.utcnow()
     has_recent_i1 = False
     max_age_min = 0.0
     for tag in signal_tags:

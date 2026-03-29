@@ -20,7 +20,8 @@ from src.models import (
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    from src.backtest.clock import Clock
+    return Clock.utcnow()
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -214,8 +215,8 @@ class Database:
 
     async def get_recently_traded_market_ids(self, cooldown_hours: float) -> set:
         """Return market_ids traded (executed, not SKIP) within the cooldown window."""
-        from datetime import datetime, timezone, timedelta
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)).isoformat()
+        from src.backtest.clock import Clock
+        cutoff = (Clock.utcnow() - timedelta(hours=cooldown_hours)).isoformat()
         cursor = await self._conn.execute(
             "SELECT DISTINCT market_id FROM trade_records "
             "WHERE action != 'SKIP' AND timestamp >= ?",
@@ -226,8 +227,8 @@ class Database:
 
     async def get_recently_evaluated_market_ids(self, hours: float) -> set:
         """Return market_ids that had a Grok evaluation (including low_edge SKIPs) within the window."""
-        from datetime import datetime, timezone, timedelta
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        from src.backtest.clock import Clock
+        cutoff = (Clock.utcnow() - timedelta(hours=hours)).isoformat()
         cursor = await self._conn.execute(
             "SELECT DISTINCT market_id FROM trade_records "
             "WHERE timestamp >= ? AND grok_raw_probability IS NOT NULL",
@@ -238,8 +239,8 @@ class Database:
 
     async def get_recent_market_questions(self, hours: float) -> list:
         """Return (market_id, question, market_type) for recently traded markets."""
-        from datetime import datetime, timezone, timedelta
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        from src.backtest.clock import Clock
+        cutoff = (Clock.utcnow() - timedelta(hours=hours)).isoformat()
         cursor = await self._conn.execute(
             "SELECT DISTINCT market_id, market_question, market_type FROM trade_records "
             "WHERE action != 'SKIP' AND timestamp >= ? AND market_question IS NOT NULL",
