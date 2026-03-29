@@ -1,8 +1,23 @@
-# Polymarket Prediction System v2.7 — Complete Project Bible
+# Polymarket Prediction System v2.10 — Complete Project Bible
 
-> **Version:** 2.7.1 | **Last updated:** 2026-03-26
+> **Version:** 2.10 | **Last updated:** 2026-03-29
 > **Status:** Paper trading (restarted after 2-week pause)
 > **Bankroll:** $10,000 | **Monthly OpEx target:** <$35
+>
+> **v2.10 changes:**
+> - **Orderbook re-fetch after Grok:** Orderbook re-fetched in `_process_market()` immediately after `call_grok_with_retry()` returns. Prevents adverse selection from latency bots sweeping the book during the ~2–4s Grok window. If the book moved against the prediction, edge is negative → trade skipped naturally.
+> - **Deterministic signal classification:** `info_type` (I1-I5) is now assigned at signal creation via `classify_info_type(source_tier)` in `signal_classifier.py`. S1→I1, S2/S3→I2, S4→I3, S5→I4, S6→I5. Replaces Grok-based classification (which had no timestamps, making temporal decay dead code, and introduced subjective variance). `signal_info_types` removed from Grok prompt and `REQUIRED_FIELDS`. Signal tags now include real publication timestamps.
+> - **Market-type specific temporal decay:** `_DECAY_PARAMS` dict in `adjustment.py` replaces uniform 0.05/hr decay. Crypto signals decay at 0.05/min (floor 0.40, grace 1 min); political/regulatory decay at 0.01-0.02/hr (floor 0.80-0.85, grace 1-2h). Decay now actually fires (previously dead code — Grok signal_tags had no timestamps).
+> - 575 tests passing (was 535).
+>
+> **v2.9 changes:**
+> - **Price range filter:** Markets with YES > 0.95 or < 0.05 are skipped in `get_active_markets()`. Counters `filtered_price_range` in `market_filter_results` log. Prevents extreme-leverage positions (BUY_NO at YES=0.9995 = 64,000 shares for $32 → $63K payout on a small move).
+> - **Notional exposure cap in `kelly_size()`:** After USD cap, max payout (position / share_price) is capped at `MAX_POSITION_PCT × bankroll`. A single trade can never win more than the position cap, preventing leverage explosions at extreme prices.
+> - **Datasette dashboard:** 17 canned analytical queries in `metadata.json` (performance_summary, pnl_by_exit_type, pnl_by_action, pnl_by_market_type, top_wins, top_losses, active_positions, trade_log, todays_trades, portfolio_overview, brier_by_market_type, calibration_state, signal_tracker_lift, daily_api_costs, model_comparison, headline_only_analysis, skip_reasons). Custom Jinja2 template (`templates/base.html`) for horizontal scrolling on wide tables. Datasette systemd service updated with `--metadata metadata.json --template-dir templates/`.
+>
+> **v2.8 changes:**
+> - **WebSocket real-time exit manager:** `RealTimeExitManager` in `src/engine/ws_exit.py` subscribes to Polymarket market channel for instant TP/SL triggers. 5-min polling fallback retained.
+> - **Volume-sorted pagination:** Market scanner fetches 3 × 500 markets sorted by volume (1,500 most active), up from unsorted 200.
 >
 > **v2.7.1 changes:**
 > - **Orderbook sorting fix:** Bids are now sorted descending by price and asks ascending before slicing top 5 from CLOB API. Previously unsorted data could return non-best levels.
@@ -354,7 +369,7 @@ Type=simple
 User=botuser
 WorkingDirectory=/home/botuser/polymarket-bot
 Environment=PATH=/home/botuser/polymarket-bot/venv/bin:/usr/bin
-ExecStart=/home/botuser/polymarket-bot/venv/bin/datasette /home/botuser/polymarket-bot/data/predictor.db --host 0.0.0.0 --port 8001 --setting sql_time_limit_ms 5000
+ExecStart=/home/botuser/polymarket-bot/venv/bin/datasette /home/botuser/polymarket-bot/data/predictor.db --host 0.0.0.0 --port 8001 --setting sql_time_limit_ms 5000 --metadata metadata.json --template-dir templates/
 Restart=always
 RestartSec=10
 
@@ -507,12 +522,11 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 │                                                                   │
 │  Single API call per market. Receives MarketContext.               │
 │  Returns structured JSON:                                         │
-│    {estimated_probability, confidence, reasoning,                  │
-│     key_signals_used, contradictions,                              │
-│     signal_info_types: {"signal_name": "I1|I2|I3|I4|I5"}}       │
+│    {estimated_probability, confidence, reasoning}                  │
 │                                                                   │
-│  Grok classifies information types (I1-I5) per signal.           │
-│  Source tiers (S1-S6) are pre-classified before Grok sees them.  │
+│  Source tiers (S1-S6) and info types (I1-I5) are both            │
+│  pre-classified deterministically before Grok sees them.         │
+│  Grok does NOT classify signal types (removed v2.10).             │
 │                                                                   │
 │  IMPORTANT: Grok outputs RAW probability.                         │
 │  Learning system adjusts it AFTER Grok returns.                   │
@@ -652,7 +666,7 @@ Every signal gets TWO tags: one source tier (WHO said it) + one information type
 | S5 | `market_derived` | Polymarket orderbook data, whale trade on-chain, volume spike, cross-market divergence. No human source — purely market data. | 0.70 |
 | S6 | `unverified_social` | Everything else. Verified <50K, unverified high-engagement, anonymous accounts. | 0.30 |
 
-### 6.4 Dimension 2: Information Types (Classified by LLM)
+### 6.4 Dimension 2: Information Types (Classified Deterministically — v2.10)
 
 | Type | Name | Description | Example |
 |------|------|-------------|---------|
@@ -661,11 +675,23 @@ Every signal gets TWO tags: one source tier (WHO said it) + one information type
 | I3 | `weak_directional` | Evidence modestly shifting probability. Polls, analyst opinions, unnamed sources. | "Sources say negotiations stalling" |
 | I4 | `sentiment_shift` | Social/market mood change without specific factual claim. | Bitcoin fear index drops to 15 |
 | I5 | `contradictory` | Signal conflicts with other signals or market price. | Wire says deal done, official denies it |
-| I6 | `price_action_only` | No news — just market data showing unusual movement. | $200K buy at 0.55 when market was at 0.50 |
+
+**Deterministic mapping from source tier (v2.10):** Previously Grok classified info types, but this introduced subjective variance (same headline → different type each run) and — critically — the resulting `signal_tags` had no timestamps, making temporal decay dead code. Info type is now assigned at signal creation via `classify_info_type(source_tier)`:
+
+| Source Tier | Info Type | Rationale |
+|-------------|-----------|-----------|
+| S1 | I1 | Official/verified sources → deterministic outcomes |
+| S2 | I2 | Major wire services → strong directional |
+| S3 | I2 | Institutional media/analysts → strong directional |
+| S4 | I3 | Verified experts → weak directional |
+| S5 | I4 | Market intelligence → sentiment shift |
+| S6 | I5 | Unverified social → contradictory/low confidence |
+
+Signal objects now include real publication timestamps, making temporal decay (Step 5) actually operational.
 
 ### 6.5 Why Two Dimensions Matter
 
-Source tier is classified **programmatically** (account handle / domain matching — no ambiguity). Information type is classified **by the LLM** (semantic judgment — "expected to hold" vs "holds" requires content understanding). This plays to each system's strengths.
+Source tier is classified **programmatically** (account handle / domain matching — no ambiguity). Information type is also classified **deterministically** from source tier (v2.10 — was previously LLM-classified). This plays to each system's strengths: the S→I mapping is highly predictable and stable across runs.
 
 The two-tag system enables granular learning:
 
@@ -971,27 +997,54 @@ def adjust_prediction(
     mtype_perf = market_type_performance.get(market_type)
     extra_edge = mtype_perf.edge_adjustment if mtype_perf else 0.0
     
-    # Step 5: Temporal confidence decay
-    # Confidence should decrease as time passes without new signals arriving.
-    # A market with no fresh signals (<30 min old) is relying on stale information
-    # and the confidence should reflect that. Conversely, I1 (deterministic) signals
-    # very close to resolution are MORE reliable, not less.
-    if signal_tags:
-        freshest_signal_age_hours = min(
-            (datetime.utcnow() - tag.get("timestamp", datetime.utcnow())).total_seconds() / 3600
-            for tag in signal_tags
-        ) if any(tag.get("timestamp") for tag in signal_tags) else 2.0
-        
-        has_deterministic = any(tag.get("info_type") == "I1" for tag in signal_tags)
-        
-        if has_deterministic and freshest_signal_age_hours < 0.5:
-            # Recent deterministic signal — boost confidence slightly
-            adjusted_confidence = min(0.99, adjusted_confidence * 1.05)
-        elif freshest_signal_age_hours > 1.0:
-            # All signals are >1h old — decay confidence
-            decay = max(0.85, 1.0 - 0.05 * (freshest_signal_age_hours - 1.0))
-            adjusted_confidence = max(0.50, adjusted_confidence * decay)
-    
+    # Step 5: Temporal confidence decay (market-type specific — v2.10)
+    # Previously used a uniform 0.05/hr rate and was dead code (signal_tags from Grok
+    # had no timestamps). Now _DECAY_PARAMS provides per-market-type rates, and
+    # signal_tags are built from signal objects with real publication timestamps.
+    #
+    # _DECAY_PARAMS = {
+    #   "crypto_15m": {"rate": 0.05, "per_min": True,  "floor": 0.40, "grace_min": 1.0},
+    #   "political":  {"rate": 0.02, "per_min": False, "floor": 0.80, "grace_min": 60.0},
+    #   "economic":   {"rate": 0.03, "per_min": False, "floor": 0.75, "grace_min": 60.0},
+    #   "sports":     {"rate": 0.04, "per_min": False, "floor": 0.75, "grace_min": 30.0},
+    #   "cultural":   {"rate": 0.02, "per_min": False, "floor": 0.80, "grace_min": 120.0},
+    #   "regulatory": {"rate": 0.01, "per_min": False, "floor": 0.85, "grace_min": 120.0},
+    #   "_default":   {"rate": 0.05, "per_min": False, "floor": 0.85, "grace_min": 60.0},
+    # }
+    #
+    # per_min=True → rate is per minute (crypto); per_min=False → rate is per hour.
+    # grace_min: minimum age before decay fires (all ages in minutes for uniformity).
+    #
+    # Decay examples:
+    #   crypto_15m + 10min signal: excess=9min, decay=max(0.40, 1.0-0.05×9)=0.55
+    #   political  + 2.5h signal:  excess=90min→1.5h, decay=max(0.80, 1.0-0.02×1.5)=0.97
+    #   political  + 12h signal:   excess=660min→11h, decay=max(0.80, 1.0-0.02×11)=0.80 (floor)
+    params = _DECAY_PARAMS.get(market_type, _DECAY_PARAMS["_default"])
+    now = datetime.now(timezone.utc)
+    has_recent_i1 = False
+    max_age_min = 0.0
+    for tag in signal_tags:
+        ts_str = tag.get("timestamp")
+        if ts_str:
+            try:
+                ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+                age_min = (now - ts).total_seconds() / 60.0
+                max_age_min = max(max_age_min, age_min)
+                if tag.get("info_type") == "I1" and age_min < 30.0:
+                    has_recent_i1 = True
+            except (ValueError, TypeError):
+                pass
+
+    if has_recent_i1:
+        adjusted_confidence *= 1.05
+        adjusted_confidence = min(0.99, adjusted_confidence)
+    elif max_age_min > params["grace_min"]:
+        excess = max_age_min - params["grace_min"]
+        age_unit = excess if params["per_min"] else excess / 60.0
+        decay = max(params["floor"], 1.0 - params["rate"] * age_unit)
+        adjusted_confidence *= decay
+        adjusted_confidence = max(0.50, adjusted_confidence)
+
     return adjusted_probability, adjusted_confidence, extra_edge
 ```
 
@@ -1171,6 +1224,22 @@ In addition to Monk Mode, the scheduler prevents duplicate bets via:
 4. **Similarity check**: `QUESTION_SIMILARITY_THRESHOLD=0.60` — Jaccard keyword overlap blocks near-duplicate questions of the same `market_type`
 
 Checks 1, 2, and 4 produce auditable SKIP records (`market_cooldown`, `similar_to_{id}`). Check 3 is a silent skip to avoid DB bloat.
+
+### 9.1c Market Price Range Filter (added v2.9)
+
+Markets with extreme YES prices are excluded in `get_active_markets()` after resolution and liquidity filters:
+
+```python
+MIN_TRADEABLE_PRICE: float = 0.05
+MAX_TRADEABLE_PRICE: float = 0.95
+
+# Applied in get_active_markets():
+if yes_price > MAX_TRADEABLE_PRICE or yes_price < MIN_TRADEABLE_PRICE:
+    filtered_price_range += 1
+    continue
+```
+
+**Motivation:** At extreme prices, the leverage implicit in a prediction market becomes dangerous. Example: BUY_NO at YES=0.9995 means $32 buys 64,000 NO shares → $63,800 payout if the market swings down even slightly. This caused a simulated portfolio explosion to $48M in a single scan cycle. The notional cap in `kelly_size()` (see 10.4) is a second layer of defense, but this filter prevents even analyzing extreme markets.
 
 ### 9.2 Enforcement
 
@@ -1439,8 +1508,25 @@ def kelly_size(adjusted_prob: float, market_price: float, side: str,
     quarter_kelly = full_kelly * kelly_fraction
     position = quarter_kelly * bankroll
     max_position = max_position_pct * bankroll
-    
-    return min(position, max_position)
+
+    # USD cap
+    position = min(position, max_position)
+
+    # Notional exposure cap (v2.9): max possible payout cannot exceed max_position.
+    # Without this, buying YES at $0.05/share with a $160 bet buys 3,200 shares
+    # → $3,200 potential payout = 20× the intended risk cap.
+    # BUY_YES: payout_per_dollar = 1/market_price
+    # BUY_NO:  payout_per_dollar = 1/(1-market_price)
+    if side == "BUY_YES":
+        max_payout = position / market_price
+        if max_payout > max_position:
+            position = max_position * market_price
+    elif side == "BUY_NO":
+        max_payout = position / (1 - market_price)
+        if max_payout > max_position:
+            position = max_position * (1 - market_price)
+
+    return position
 ```
 
 ### 10.4b VWAP Position Capping (added v2.7)
@@ -1453,6 +1539,27 @@ def kelly_size(adjusted_prob: float, market_price: float, side: str,
 4. Cap at fillable depth
 
 This prevents the scenario where Kelly says $160 but only $50 exists at the top-of-book price. The remaining $110 would eat into worse price levels, turning +EV → -EV.
+
+### 10.4c Orderbook Re-Fetch After Grok (added v2.10)
+
+The orderbook is fetched once before calling Grok, then **re-fetched after `call_grok_with_retry()` returns**, before edge calculation:
+
+```python
+# Before Grok:
+orderbook = await self._polymarket.get_orderbook(market.clob_token_id_yes, market.market_id)
+
+# ... call_grok_with_retry() takes ~2-4s ...
+
+# After Grok (re-fetch to avoid adverse selection):
+orderbook = await self._polymarket.get_orderbook(market.clob_token_id_yes, market.market_id)
+
+# Edge calculation now uses fresh prices:
+edge = calculate_spread_adjusted_edge(..., orderbook.best_ask)
+```
+
+**Why this matters:** During breaking news events, latency bots (using regex/keyword triggers executing in <50ms) can sweep the orderbook while Grok is thinking. Without re-fetch, edge would be calculated against stale pre-sweep prices — the bot would buy into a book that has already moved against the prediction.
+
+**Why no explicit adverse-selection guard is needed:** `calculate_spread_adjusted_edge()` uses `orderbook.best_bid/best_ask`. If the book swept in the direction of our Grok prediction (e.g., BUY_YES on a market that just moved to 0.90), the new ask is now higher than Grok's estimated probability and edge is negative → trade skipped naturally.
 
 ### 10.5 Early Exit: Take-Profit / Stop-Loss (v2.7 → v2.8 WebSocket)
 
@@ -1605,7 +1712,7 @@ class TwitterDataPipeline:
             scored.append((SOURCE_TIER_CREDIBILITY[source_tier], source_tier, tweet))
         
         scored.sort(reverse=True)
-        return [Signal(source="twitter", source_tier=st, info_type=None,
+        return [Signal(source="twitter", source_tier=st, info_type=classify_info_type(st),
                        content=tw.text[:280], credibility=cred,
                        author=tw.author.screen_name, followers=tw.author.followers_count,
                        engagement=tw.engagement_score, timestamp=tw.created_at)
@@ -1669,7 +1776,7 @@ class RSSPipeline:
                     
                     source_tier = classify_source_tier({"source_type": "rss", "domain": cfg["domain"]})
                     signals.append(Signal(
-                        source="rss", source_tier=source_tier, info_type=None,
+                        source="rss", source_tier=source_tier, info_type=classify_info_type(source_tier),
                         content=headline, credibility=SOURCE_TIER_CREDIBILITY[source_tier],
                         author=feed_name, followers=0, engagement=0, timestamp=published,
                         headline_only=True,
@@ -1687,37 +1794,31 @@ def build_grok_context(market: Market, twitter_signals: List[Signal],
     all_signals = sorted(twitter_signals + rss_signals, key=lambda s: s.credibility, reverse=True)[:7]
     
     signal_text = "\n".join([
-        f"- [Source: {s.source_tier}] ({s.credibility:.0%}) {s.content}"
+        f"- [{s.source_tier}|{s.source}] ({s.credibility:.0%}) @{s.author}: {s.content}"
         for s in all_signals
-    ])
-    
-    bid_depth = sum(orderbook.bids[:5])
-    ask_depth = sum(orderbook.asks[:5])
-    book_skew = bid_depth / max(ask_depth, 0.01)
-    
-    return f"""MARKET: {market.question}
-CURRENT PRICE: YES={market.yes_price:.3f} NO={market.no_price:.3f}
-RESOLUTION: {market.resolution_time.isoformat()} ({market.hours_to_resolution:.1f}h from now)
-VOLUME 24H: ${market.volume_24h:,.0f}
-LIQUIDITY: ${market.liquidity:,.0f}
-ORDER BOOK: Bid depth ${bid_depth:,.0f} / Ask depth ${ask_depth:,.0f} (skew {book_skew:.2f}x)
+    ]) or "No signals available."
 
-SIGNALS (ranked by credibility, source tier in brackets):
+    bid_depth = sum(level.size for level in orderbook.bids)
+    ask_depth = sum(level.size for level in orderbook.asks)
+    ob_depth = bid_depth + ask_depth
+    ob_skew = (bid_depth - ask_depth) / ob_depth if ob_depth > 0 else 0.0
+
+    return f"""MARKET: {market.question}
+CURRENT PRICE: YES={market.yes_price:.4f} NO={market.no_price:.4f}
+RESOLUTION: {market.hours_to_resolution:.1f}h from now
+VOLUME 24H: ${market.volume_24h:,.0f} | LIQUIDITY: ${market.liquidity:,.0f}
+ORDER BOOK: depth=${ob_depth:,.0f} skew={ob_skew:+.2f} (positive=buy pressure)
+
+SIGNALS (ranked by credibility):
 {signal_text}
 
-TASK: Estimate the TRUE probability that this market resolves YES.
-Consider signal credibility, potential contradictions, and orderbook state.
-Be conservative — overconfidence destroys capital.
+INSTRUCTIONS:
+1. Analyze the signals and market context
+2. Estimate the probability of YES outcome
+3. Rate your confidence in the estimate
 
-For each signal you rely on, classify its information type:
-- I1: deterministic_outcome (event already happened / officially decided)
-- I2: strong_directional (credible evidence strongly shifting probability)
-- I3: weak_directional (polls, opinions, unnamed sources)
-- I4: sentiment_shift (mood change, no specific factual claim)
-- I5: contradictory (conflicts with other signals or market price)
-
-Respond ONLY with valid JSON:
-{{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "...", "key_signals_used": ["..."], "contradictions": ["..."], "signal_info_types": {{"signal_description": "I1|I2|I3|I4|I5"}}}}"""
+Respond with ONLY this JSON (no markdown, no extra text):
+{{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "..."}}"""
 ```
 
 ### 11.5 Grok Response Parsing & Error Handling
@@ -1729,7 +1830,9 @@ import json
 import re
 
 MAX_RETRIES = 2
-REQUIRED_FIELDS = {"estimated_probability", "confidence", "reasoning", "signal_info_types"}
+REQUIRED_FIELDS = {"estimated_probability", "confidence", "reasoning"}
+# signal_info_types removed in v2.10 — info_type is now assigned deterministically
+# from source_tier at signal creation time, not by Grok
 
 
 async def call_grok_with_retry(context: str, market_id: str) -> Optional[dict]:
@@ -2229,31 +2332,40 @@ Datasette turns the SQLite database into a browsable web interface with zero cus
 **Setup:**
 ```bash
 pip install datasette datasette-auth-passwords
-datasette predictor.db --host 0.0.0.0 --port 8001
+datasette predictor.db --host 0.0.0.0 --port 8001 --metadata metadata.json --template-dir templates/
 ```
 
 **What you get:**
 - Full SQL query interface on all tables
-- Saved queries as bookmarks (canned views for common needs)
+- 17 canned analytical queries via `metadata.json` (see below)
+- Custom Jinja2 template (`templates/base.html`) with horizontal scrolling on wide tables
 - JSON API for any query (useful for future automation)
 - Basic auth via `datasette-auth-passwords` plugin
 
-**Essential saved queries:**
+**17 canned queries (defined in `metadata.json`):**
+
+| Name | Description |
+|------|-------------|
+| `performance_summary` | Win rate, ROI, avg edge, avg Brier (last 30 days) |
+| `pnl_by_exit_type` | PnL broken down by exit type (resolved, take_profit, stop_loss) |
+| `pnl_by_action` | PnL broken down by action (BUY_YES, BUY_NO, SKIP) |
+| `pnl_by_market_type` | PnL, Brier, trade count by market type |
+| `top_wins` | Top 10 most profitable trades |
+| `top_losses` | Top 10 worst losses |
+| `active_positions` | Open positions with unrealized estimates |
+| `trade_log` | Full trade log with all fields |
+| `todays_trades` | Today's trades ordered by timestamp desc |
+| `portfolio_overview` | Cash, equity, PnL, peak, drawdown |
+| `brier_by_market_type` | RAW vs ADJUSTED Brier by market type (last 30 days) |
+| `calibration_state` | Per-bucket calibration alpha/beta → expected accuracy |
+| `signal_tracker_lift` | Source × info_type × market_type lift ratios (≥5 samples) |
+| `daily_api_costs` | Daily spend by service |
+| `model_comparison` | Experiment runs side-by-side (model, trades, PnL, Brier) |
+| `headline_only_analysis` | Headline-only vs full-content signal accuracy comparison |
+| `skip_reasons` | Skip reason distribution (why trades were skipped) |
 
 ```sql
--- Portfolio overview
-SELECT cash_balance, total_equity, total_pnl, peak_equity, max_drawdown,
-       ROUND(max_drawdown / peak_equity * 100, 1) as drawdown_pct
-FROM portfolio;
-
--- Today's trades
-SELECT timestamp, market_question, market_type, action, calculated_edge,
-       trade_score, position_size_usd, pnl, skip_reason
-FROM trade_records WHERE date(timestamp) = date('now') ORDER BY timestamp DESC;
-
--- Brier score by market type — RAW vs ADJUSTED (last 30 days)
--- Raw = Grok accuracy. Adjusted = full system accuracy. 
--- Go-live criterion uses ADJUSTED. Gap between them shows learning system impact.
+-- Example: brier_by_market_type (Raw = Grok accuracy, Adjusted = full system accuracy)
 SELECT market_type, COUNT(*) as trades,
        ROUND(AVG(brier_score_raw), 3) as avg_brier_raw,
        ROUND(AVG(brier_score_adjusted), 3) as avg_brier_adjusted,
@@ -2263,12 +2375,7 @@ FROM trade_records
 WHERE brier_score_raw IS NOT NULL AND timestamp > datetime('now', '-30 days')
 GROUP BY market_type;
 
--- Calibration bucket state
-SELECT bucket_range, ROUND(alpha / (alpha + beta), 3) as expected_accuracy,
-       CAST(alpha + beta - 2 AS INTEGER) as sample_count
-FROM calibration_state;
-
--- Signal tracker lift (most useful combinations)
+-- Example: signal_tracker_lift
 SELECT source_tier, info_type, market_type,
        present_winning + present_losing as total_present,
        CASE WHEN (present_winning + present_losing) >= 5 AND (absent_winning + absent_losing) >= 5
@@ -2279,26 +2386,11 @@ FROM signal_trackers
 WHERE present_winning + present_losing >= 5
 ORDER BY lift DESC;
 
--- Daily API costs
-SELECT date, service, calls, ROUND(cost_usd, 4) as cost
-FROM api_costs ORDER BY date DESC, service;
-
--- Counterfactual: would skipped trades have been profitable?
-SELECT market_type, COUNT(*) as skipped,
-       ROUND(SUM(counterfactual_pnl), 2) as missed_pnl
-FROM market_type_performance WHERE total_observed > 0;
-
--- Model comparison
-SELECT run_id, model_used, total_trades, ROUND(total_pnl, 2) as pnl,
-       ROUND(avg_brier, 3) as brier
-FROM experiment_runs ORDER BY started_at DESC;
-
--- Headline-only signal analysis (does full article matter?)
-SELECT headline_only_signal, COUNT(*) as trades,
-       ROUND(AVG(brier_score_adjusted), 3) as avg_brier,
-       ROUND(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as win_pct
-FROM trade_records WHERE brier_score_adjusted IS NOT NULL
-GROUP BY headline_only_signal;
+-- Example: skip_reasons
+SELECT skip_reason, COUNT(*) as count,
+       ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) as pct
+FROM trade_records WHERE action = 'SKIP' AND skip_reason IS NOT NULL
+GROUP BY skip_reason ORDER BY count DESC;
 ```
 
 ### 16.2 Phase 3+: Custom React Dashboard (Only If Profitable)

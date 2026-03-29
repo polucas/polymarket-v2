@@ -110,16 +110,10 @@ SIGNALS:
 
 INSTRUCTIONS:
 1. Analyze the signals and market context
-2. Classify each signal's information type:
-   - I1: Verified fact (official announcement, confirmed event)
-   - I2: Authoritative analysis (expert opinion, institutional report)
-   - I3: Statistical/data-driven (polls, economic indicators)
-   - I4: Market intelligence (order flow, whale movements)
-   - I5: Rumor/speculation (unconfirmed reports, social media buzz)
-3. Estimate the probability of YES outcome
-4. Rate your confidence in the estimate
+2. Estimate the probability of YES outcome
+3. Rate your confidence in the estimate
 
 Respond with ONLY this JSON (no markdown, no extra text):
-{{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "...", "signal_info_types": [{{"source_tier": "SX", "info_type": "IX", "content_summary": "..."}}]}}"""
+{{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "..."}}"""
 
     return context

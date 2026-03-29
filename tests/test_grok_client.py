@@ -28,9 +28,6 @@ def _valid_grok_dict(**overrides) -> dict:
         "estimated_probability": 0.72,
         "confidence": 0.85,
         "reasoning": "Strong bullish signal from official sources.",
-        "signal_info_types": [
-            {"source_tier": "S1", "info_type": "I1", "content_summary": "Official announcement."},
-        ],
     }
     base.update(overrides)
     return base
@@ -139,7 +136,7 @@ class TestParseJsonSafe:
 class TestValidateGrokResponse:
     def test_missing_required_fields_returns_none(self):
         incomplete = {"estimated_probability": 0.5, "confidence": 0.5}
-        # Missing: reasoning, signal_info_types
+        # Missing: reasoning
         result = _validate_grok_response(incomplete)
         assert result is None
 
@@ -194,12 +191,16 @@ class TestValidateGrokResponse:
         result = _validate_grok_response(data)
         assert result is None
 
-    def test_missing_only_signal_info_types(self):
-        """#14 — Response missing only 'signal_info_types' -> validation fails."""
-        data = _valid_grok_dict()
-        del data["signal_info_types"]
+    def test_response_without_signal_info_types_passes(self):
+        """#14 — signal_info_types is no longer required; response without it passes validation."""
+        data = {
+            "estimated_probability": 0.72,
+            "confidence": 0.85,
+            "reasoning": "Strong signal.",
+        }
         result = _validate_grok_response(data)
-        assert result is None
+        assert result is not None
+        assert result["estimated_probability"] == pytest.approx(0.72)
 
     def test_confidence_negative_returns_none(self):
         """#16 — confidence = -0.1 (below 0.0) -> validation fails."""

@@ -102,7 +102,7 @@ class TestGetSignalsForMarket:
         sig = signals[0]
         assert sig.source == "twitter"
         assert sig.source_tier in ("S1", "S2", "S3", "S4", "S5", "S6")
-        assert sig.info_type is None
+        assert sig.info_type == "I2"  # S3 → I2 (deterministic via classify_info_type)
 
 
 # ---------------------------------------------------------------------------

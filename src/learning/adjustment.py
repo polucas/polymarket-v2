@@ -3,6 +3,21 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
+# Temporal confidence decay parameters per market type.
+# rate: decay coefficient applied per time unit (per minute if per_min=True, else per hour)
+# per_min: True means rate is per-minute (fast-moving markets); False means per-hour
+# floor: minimum decay multiplier (confidence never drops below floor * original)
+# grace_min: no decay is applied during this initial grace period (in minutes)
+_DECAY_PARAMS: dict = {
+    "crypto_15m": {"rate": 0.05, "per_min": True,  "floor": 0.40, "grace_min": 1.0},
+    "political":  {"rate": 0.02, "per_min": False, "floor": 0.80, "grace_min": 60.0},
+    "economic":   {"rate": 0.03, "per_min": False, "floor": 0.75, "grace_min": 60.0},
+    "sports":     {"rate": 0.04, "per_min": False, "floor": 0.75, "grace_min": 30.0},
+    "cultural":   {"rate": 0.02, "per_min": False, "floor": 0.80, "grace_min": 120.0},
+    "regulatory": {"rate": 0.01, "per_min": False, "floor": 0.85, "grace_min": 120.0},
+    "_default":   {"rate": 0.05, "per_min": False, "floor": 0.85, "grace_min": 60.0},
+}
+
 import structlog
 
 from src.db.sqlite import Database
@@ -58,19 +73,21 @@ def adjust_prediction(
     # Step 4: Market-type edge penalty
     extra_edge = market_type_mgr.get_edge_adjustment(market_type)
 
-    # Step 5: Temporal confidence decay
-    # Check signal ages - applied per signal
+    # Step 5: Temporal confidence decay (market-type specific)
+    # signal_tags now include real timestamps from signal objects, so decay actually fires.
+    # Previously tags came from Grok's signal_info_types (no timestamps) — decay was dead code.
+    params = _DECAY_PARAMS.get(market_type, _DECAY_PARAMS["_default"])
     now = datetime.now(timezone.utc)
     has_recent_i1 = False
-    max_age_hours = 0.0
+    max_age_min = 0.0
     for tag in signal_tags:
         ts_str = tag.get("timestamp")
         if ts_str:
             try:
                 ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
-                age_hours = (now - ts).total_seconds() / 3600
-                max_age_hours = max(max_age_hours, age_hours)
-                if tag.get("info_type") == "I1" and age_hours < 0.5:
+                age_min = (now - ts).total_seconds() / 60.0
+                max_age_min = max(max_age_min, age_min)
+                if tag.get("info_type") == "I1" and age_min < 30.0:
                     has_recent_i1 = True
             except (ValueError, TypeError):
                 pass
@@ -78,8 +95,10 @@ def adjust_prediction(
     if has_recent_i1:
         adjusted_confidence *= 1.05
         adjusted_confidence = min(0.99, adjusted_confidence)
-    elif max_age_hours > 1.0:
-        decay = max(0.85, 1.0 - 0.05 * (max_age_hours - 1.0))
+    elif max_age_min > params["grace_min"]:
+        excess = max_age_min - params["grace_min"]
+        age_unit = excess if params["per_min"] else excess / 60.0
+        decay = max(params["floor"], 1.0 - params["rate"] * age_unit)
         adjusted_confidence *= decay
         adjusted_confidence = max(0.50, adjusted_confidence)
 

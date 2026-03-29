@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.pipelines.signal_classifier import classify_source_tier, SOURCE_TIER_CREDIBILITY
+from src.pipelines.signal_classifier import classify_source_tier, classify_info_type, SOURCE_TIER_CREDIBILITY
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +303,45 @@ class TestEdgeCases:
 # ---------------------------------------------------------------------------
 # SOURCE_TIER_CREDIBILITY mapping
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# classify_info_type -- deterministic source tier -> info type mapping
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyInfoType:
+    """classify_info_type maps source tiers deterministically to I1-I5."""
+
+    def test_s1_maps_to_i1(self):
+        assert classify_info_type("S1") == "I1"
+
+    def test_s2_maps_to_i2(self):
+        assert classify_info_type("S2") == "I2"
+
+    def test_s3_maps_to_i2(self):
+        assert classify_info_type("S3") == "I2"
+
+    def test_s4_maps_to_i3(self):
+        assert classify_info_type("S4") == "I3"
+
+    def test_s5_maps_to_i4(self):
+        assert classify_info_type("S5") == "I4"
+
+    def test_s6_maps_to_i5(self):
+        assert classify_info_type("S6") == "I5"
+
+    def test_unknown_tier_defaults_to_i5(self):
+        assert classify_info_type("S99") == "I5"
+
+    def test_empty_tier_defaults_to_i5(self):
+        assert classify_info_type("") == "I5"
+
+    def test_deterministic_same_input_same_output(self):
+        """Same tier always returns the same info type."""
+        for _ in range(5):
+            assert classify_info_type("S1") == "I1"
+            assert classify_info_type("S6") == "I5"
 
 
 class TestSourceTierCredibility:

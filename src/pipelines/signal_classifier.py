@@ -89,6 +89,27 @@ _S4_MIN_FOLLOWERS: int = 50_000
 # ---------------------------------------------------------------------------
 
 
+_SOURCE_TO_INFO_TYPE: dict = {
+    "S1": "I1",  # Official/verified: government, central banks, company IR
+    "S2": "I2",  # Major wire services: Reuters, AP, Bloomberg
+    "S3": "I2",  # Significant media/analysts
+    "S4": "I3",  # Statistical/analytical sources
+    "S5": "I4",  # Market intelligence: crypto traders, whale watchers
+    "S6": "I5",  # Speculation: anonymous accounts, low-credibility
+}
+
+
+def classify_info_type(source_tier: str) -> str:
+    """Deterministically map a source tier to an information type.
+
+    Returns one of I1-I5 based on the tier, defaulting to I5 for unknowns.
+    This replaces the previous approach of asking Grok to classify info types,
+    which introduced subjective variance and prevented timestamps from being
+    included in signal_tags (breaking temporal decay).
+    """
+    return _SOURCE_TO_INFO_TYPE.get(source_tier, "I5")
+
+
 def classify_source_tier(signal: dict) -> str:
     """Classify a signal dict into a source tier (S1-S6).
 

@@ -517,9 +517,8 @@ class TestTemporalDecayBoost:
         assert adj_conf == pytest.approx(0.84, abs=1e-9)
 
     def test_all_signals_over_2h_decay(self):
-        """Test 45: All signals > 2h old -> confidence decays by temporal_decay formula.
-        decay = max(0.85, 1.0 - 0.05 * (max_age_hours - 1.0))
-        For 2.5h: decay = max(0.85, 1.0 - 0.05 * 1.5) = max(0.85, 0.925) = 0.925
+        """Test 45: political signal 2.5h old -> minimal decay (rate=0.02/hr, grace=1h).
+        age_min=150, excess=90min, age_unit=1.5h, decay=max(0.80, 1.0-0.02*1.5)=0.97
         """
         from datetime import timedelta
 
@@ -540,21 +539,21 @@ class TestTemporalDecayBoost:
             signal_tracker_mgr=sig,
         )
 
-        # decay = max(0.85, 1.0 - 0.05 * (2.5 - 1.0)) = max(0.85, 0.925) = 0.925
-        # 0.80 * 0.925 = 0.74
-        assert adj_conf == pytest.approx(0.80 * 0.925, abs=0.01)
+        # political: rate=0.02/hr, floor=0.80, grace_min=60
+        # age_min=150, excess=90, age_unit=1.5h, decay=max(0.80, 1.0-0.02*1.5)=0.97
+        assert adj_conf == pytest.approx(0.80 * 0.97, abs=0.01)
 
-    def test_all_signals_over_4h_decay_floor(self):
-        """Test 46: All signals > 4h old -> confidence *= 0.85 (floor).
-        decay = max(0.85, 1.0 - 0.05 * (max_age_hours - 1.0))
-        For 5h: decay = max(0.85, 1.0 - 0.05 * 4.0) = max(0.85, 0.80) = 0.85
+    def test_all_signals_over_12h_hit_political_decay_floor(self):
+        """Test 46: political signal 12h old -> hits 0.80 floor.
+        political: rate=0.02/hr, floor=0.80, grace_min=60
+        age_min=720, excess=660, age_unit=11h, decay=max(0.80, 1.0-0.02*11)=max(0.80, 0.78)=0.80
         """
         from datetime import timedelta
 
         cal, mkt, sig = _fresh_managers()
 
         now = datetime.now(timezone.utc)
-        very_old_ts = (now - timedelta(hours=5)).isoformat()
+        very_old_ts = (now - timedelta(hours=12)).isoformat()
 
         _, adj_conf, _ = adjust_prediction(
             grok_probability=0.72,
@@ -568,9 +567,8 @@ class TestTemporalDecayBoost:
             signal_tracker_mgr=sig,
         )
 
-        # decay = max(0.85, 1.0 - 0.05 * 4.0) = max(0.85, 0.80) = 0.85
-        # 0.80 * 0.85 = 0.68 -- but clamped to >= 0.50
-        assert adj_conf == pytest.approx(0.80 * 0.85, abs=1e-9)
+        # floor kicks in: decay = max(0.80, 0.78) = 0.80 → conf = 0.80 * 0.80 = 0.64
+        assert adj_conf == pytest.approx(0.80 * 0.80, abs=1e-9)
 
     def test_no_signal_timestamps_default_behavior(self):
         """Test 47: No signal timestamps -> default behavior (no temporal adjustment)."""
@@ -589,8 +587,134 @@ class TestTemporalDecayBoost:
             signal_tracker_mgr=sig,
         )
 
-        # With no timestamps: has_recent_i1=False, max_age_hours=0.0
-        # The elif branch (max_age_hours > 1.0) is False, so no decay applied.
+        # With no timestamps: has_recent_i1=False, max_age_min=0.0
+        # The elif branch (max_age_min > grace_min) is False, so no decay applied.
         # Confidence should remain at base (+ any signal weight adjustment, which
         # is 0 for fresh tracker).
         assert adj_conf_no_ts == pytest.approx(0.80, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Market-type-specific temporal decay (Step 5 parameterized)
+# ---------------------------------------------------------------------------
+
+
+class TestTemporalDecayByMarketType:
+    """Verify that decay rates differ by market_type.
+
+    crypto_15m: 0.05/min, floor=0.40, grace=1min
+    political:  0.02/hr,  floor=0.80, grace=60min
+    """
+
+    def test_crypto_10min_signal_significant_decay(self):
+        """crypto_15m signal 10min old -> meaningful decay.
+        excess=9min, rate=0.05/min, decay=max(0.40, 1.0-0.05*9)=max(0.40, 0.55)=0.55
+        conf = 0.80*0.55 = 0.44, then clamped to max(0.50, 0.44)=0.50
+        """
+        from datetime import timedelta
+
+        cal, mkt, sig = _fresh_managers()
+        now = datetime.now(timezone.utc)
+        ts = (now - timedelta(minutes=10)).isoformat()
+
+        _, adj_conf, _ = adjust_prediction(
+            grok_probability=0.65,
+            grok_confidence=0.80,
+            market_type="crypto_15m",
+            signal_tags=[{"source_tier": "S3", "info_type": "I2", "timestamp": ts}],
+            calibration_mgr=cal,
+            market_type_mgr=mkt,
+            signal_tracker_mgr=sig,
+        )
+
+        assert adj_conf == pytest.approx(0.50, abs=0.01)
+
+    def test_crypto_fresh_i1_boost_still_applies(self):
+        """crypto_15m I1 signal < 30min old -> 1.05 boost regardless of market_type."""
+        from datetime import timedelta
+
+        cal, mkt, sig = _fresh_managers()
+        now = datetime.now(timezone.utc)
+        ts = (now - timedelta(minutes=5)).isoformat()
+
+        _, adj_conf, _ = adjust_prediction(
+            grok_probability=0.65,
+            grok_confidence=0.80,
+            market_type="crypto_15m",
+            signal_tags=[{"source_tier": "S1", "info_type": "I1", "timestamp": ts}],
+            calibration_mgr=cal,
+            market_type_mgr=mkt,
+            signal_tracker_mgr=sig,
+        )
+
+        assert adj_conf == pytest.approx(0.80 * 1.05, abs=1e-9)
+
+    def test_political_2h_signal_minimal_decay(self):
+        """political signal 2h old -> very small decay (rate=0.02/hr, grace=1hr).
+        excess=60min, age_unit=1.0h, decay=max(0.80, 1.0-0.02*1.0)=0.98
+        """
+        from datetime import timedelta
+
+        cal, mkt, sig = _fresh_managers()
+        now = datetime.now(timezone.utc)
+        ts = (now - timedelta(hours=2)).isoformat()
+
+        _, adj_conf, _ = adjust_prediction(
+            grok_probability=0.65,
+            grok_confidence=0.80,
+            market_type="political",
+            signal_tags=[{"source_tier": "S2", "info_type": "I2", "timestamp": ts}],
+            calibration_mgr=cal,
+            market_type_mgr=mkt,
+            signal_tracker_mgr=sig,
+        )
+
+        # political decays slowly; 2h old barely decays
+        assert adj_conf == pytest.approx(0.80 * 0.98, abs=0.01)
+
+    def test_crypto_no_timestamp_no_decay(self):
+        """crypto_15m signal without timestamp -> no decay (timestamps drive decay)."""
+        cal, mkt, sig = _fresh_managers()
+
+        _, adj_conf, _ = adjust_prediction(
+            grok_probability=0.65,
+            grok_confidence=0.80,
+            market_type="crypto_15m",
+            signal_tags=[{"source_tier": "S3", "info_type": "I2"}],
+            calibration_mgr=cal,
+            market_type_mgr=mkt,
+            signal_tracker_mgr=sig,
+        )
+
+        assert adj_conf == pytest.approx(0.80, abs=1e-9)
+
+    def test_crypto_decays_faster_than_political_same_age(self):
+        """For the same signal age, crypto_15m decays more than political."""
+        from datetime import timedelta
+
+        cal, mkt, sig = _fresh_managers()
+        now = datetime.now(timezone.utc)
+        ts = (now - timedelta(hours=2)).isoformat()
+
+        _, crypto_conf, _ = adjust_prediction(
+            grok_probability=0.65,
+            grok_confidence=0.80,
+            market_type="crypto_15m",
+            signal_tags=[{"source_tier": "S3", "info_type": "I2", "timestamp": ts}],
+            calibration_mgr=cal,
+            market_type_mgr=mkt,
+            signal_tracker_mgr=sig,
+        )
+
+        cal2, mkt2, sig2 = _fresh_managers()
+        _, political_conf, _ = adjust_prediction(
+            grok_probability=0.65,
+            grok_confidence=0.80,
+            market_type="political",
+            signal_tags=[{"source_tier": "S3", "info_type": "I2", "timestamp": ts}],
+            calibration_mgr=cal2,
+            market_type_mgr=mkt2,
+            signal_tracker_mgr=sig2,
+        )
+
+        assert crypto_conf < political_conf

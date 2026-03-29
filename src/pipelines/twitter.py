@@ -8,7 +8,7 @@ import structlog
 
 from src.config import Settings
 from src.models import Signal
-from src.pipelines.signal_classifier import classify_source_tier, SOURCE_TIER_CREDIBILITY
+from src.pipelines.signal_classifier import classify_source_tier, classify_info_type, SOURCE_TIER_CREDIBILITY
 
 log = structlog.get_logger()
 
@@ -67,7 +67,7 @@ class TwitterDataPipeline:
             signals.append(Signal(
                 source="twitter",
                 source_tier=st,
-                info_type=None,  # Assigned later by Grok
+                info_type=classify_info_type(st),
                 content=(tw.get("text", "") or "")[:280],
                 credibility=cred,
                 author=author.get("screen_name", ""),

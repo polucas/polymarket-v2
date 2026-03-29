@@ -10,7 +10,7 @@ import yaml
 from pathlib import Path
 
 from src.models import Signal
-from src.pipelines.signal_classifier import classify_source_tier, SOURCE_TIER_CREDIBILITY
+from src.pipelines.signal_classifier import classify_source_tier, classify_info_type, SOURCE_TIER_CREDIBILITY
 
 log = structlog.get_logger()
 
@@ -103,7 +103,7 @@ class RSSPipeline:
                     signals.append(Signal(
                         source="rss",
                         source_tier=source_tier,
-                        info_type=None,
+                        info_type=classify_info_type(source_tier),
                         content=headline,
                         credibility=SOURCE_TIER_CREDIBILITY.get(source_tier, 0.30),
                         author=feed_name,

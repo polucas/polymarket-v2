@@ -232,8 +232,9 @@ class TestBuildGrokContext:
         assert "estimated_probability" in ctx
         assert "confidence" in ctx
         assert "reasoning" in ctx
-        assert "signal_info_types" in ctx
         assert "JSON" in ctx
+        # signal_info_types removed from prompt: info_type is now assigned deterministically
+        assert "signal_info_types" not in ctx
 
     def test_zero_signals_produces_valid_prompt(self):
         """When there are 0 signals, the context is still a valid non-empty prompt."""
@@ -290,21 +291,14 @@ class TestBuildGrokContext:
         assert "[S2|twitter]" in ctx
         assert "[S3|rss]" in ctx
 
-    def test_prompt_includes_info_type_classification_instructions(self):
-        """#42 — Prompt includes info-type classification instructions text (I1-I5)."""
+    def test_prompt_does_not_include_info_type_classification_instructions(self):
+        """#42 — Prompt no longer asks Grok to classify I1-I5; this is now deterministic."""
         market = _make_market()
         ctx = build_grok_context(market, [], [], _make_orderbook())
-        assert "I1" in ctx
-        assert "I2" in ctx
-        assert "I3" in ctx
-        assert "I4" in ctx
-        assert "I5" in ctx
-        # Verify descriptive labels are present
-        assert "Verified fact" in ctx
-        assert "Authoritative analysis" in ctx
-        assert "Statistical" in ctx or "data-driven" in ctx
-        assert "Market intelligence" in ctx
-        assert "Rumor" in ctx or "speculation" in ctx
+        # info_type classification removed from prompt — assigned deterministically from source_tier
+        assert "Verified fact" not in ctx
+        assert "Authoritative analysis" not in ctx
+        assert "signal_info_types" not in ctx
 
     def test_bid_depth_is_sum_of_bids(self):
         """#46 — bid_depth = sum of orderbook bids."""

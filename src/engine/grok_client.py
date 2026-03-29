@@ -15,7 +15,7 @@ log = structlog.get_logger()
 
 XAI_API_BASE = "https://api.x.ai/v1"
 MAX_RETRIES = 2
-REQUIRED_FIELDS = {"estimated_probability", "confidence", "reasoning", "signal_info_types"}
+REQUIRED_FIELDS = {"estimated_probability", "confidence", "reasoning"}
 
 
 def parse_json_safe(raw: str) -> Optional[dict]:

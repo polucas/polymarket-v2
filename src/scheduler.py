@@ -524,7 +524,23 @@ class Scheduler:
         grok_prob = grok_result["estimated_probability"]
         grok_conf = grok_result["confidence"]
         reasoning = grok_result.get("reasoning", "")
-        signal_types = grok_result.get("signal_info_types", [])
+
+        # Build signal_tags from signal objects (deterministic info_type + real timestamps).
+        # Previously sourced from Grok's signal_info_types response, which lacked timestamps,
+        # making temporal decay inoperative.
+        signal_types = [
+            {
+                "source_tier": s.source_tier,
+                "info_type": s.info_type,
+                "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+            }
+            for s in (twitter_signals + relevant_rss)
+        ]
+
+        # Re-fetch orderbook after Grok latency (~2-4s) to avoid adverse selection.
+        # Latency bots can sweep the book during that window; recalculating edge
+        # against fresh prices ensures we skip if the book moved against our prediction.
+        orderbook = await self._polymarket.get_orderbook(market.clob_token_id_yes, market.market_id)
 
         # Adjust prediction (5-step pipeline)
         adj_prob, adj_conf, extra_edge = adjust_prediction(
