@@ -1,6 +1,6 @@
 """Daily self-check loop — Karpathy 'Autoresearch' inspired.
 
-Gathers performance metrics, calls Grok for analysis, persists findings.
+Gathers performance metrics, calls MiniMax for analysis, persists findings.
 Does NOT auto-implement changes — only documents recommendations.
 """
 
@@ -14,7 +14,7 @@ from typing import Optional
 import structlog
 
 from src.db.sqlite import Database
-from src.engine.grok_client import GrokClient, parse_json_safe
+from src.engine.grok_client import LLMClient, parse_json_safe
 from src.learning.calibration import CalibrationManager
 from src.learning.market_type import MarketTypeManager
 from src.learning.signal_tracker import SignalTrackerManager
@@ -231,7 +231,7 @@ def format_self_check_alert(review: DailyReview) -> str:
 
 async def run_daily_self_check(
     db: Database,
-    grok: GrokClient,
+    grok: LLMClient,
     calibration_mgr: CalibrationManager,
     market_type_mgr: MarketTypeManager,
     signal_tracker_mgr: SignalTrackerManager,

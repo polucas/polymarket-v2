@@ -1,4 +1,4 @@
-"""Tests for GrokClient JSON parsing, validation, and retry logic."""
+"""Tests for LLMClient (MiniMax) JSON parsing, validation, and retry logic."""
 
 from __future__ import annotations
 
@@ -9,9 +9,10 @@ import httpx
 import pytest
 
 from src.engine.grok_client import (
-    GrokClient,
+    LLMClient,
+    GrokClient,  # backward-compat alias
     parse_json_safe,
-    _validate_grok_response,
+    _validate_llm_response,
     REQUIRED_FIELDS,
     MAX_RETRIES,
 )
@@ -34,7 +35,7 @@ def _valid_grok_dict(**overrides) -> dict:
 
 
 def _make_xai_response(content: str, prompt_tokens: int = 100, completion_tokens: int = 50) -> dict:
-    """Build a fake xAI API response body."""
+    """Build a fake MiniMax API response body."""
     return {
         "choices": [{"message": {"content": content}}],
         "usage": {
@@ -46,7 +47,8 @@ def _make_xai_response(content: str, prompt_tokens: int = 100, completion_tokens
 
 def _mock_settings():
     s = MagicMock()
-    s.XAI_API_KEY = "test-xai-key"
+    s.MINIMAX_API_KEY = "test-minimax-key"
+    s.LLM_MODEL = "MiniMax-M2.7"
     return s
 
 
@@ -129,7 +131,7 @@ class TestParseJsonSafe:
 
 
 # ---------------------------------------------------------------------------
-# _validate_grok_response  --  field validation
+# _validate_llm_response  --  field validation
 # ---------------------------------------------------------------------------
 
 
@@ -137,17 +139,17 @@ class TestValidateGrokResponse:
     def test_missing_required_fields_returns_none(self):
         incomplete = {"estimated_probability": 0.5, "confidence": 0.5}
         # Missing: reasoning
-        result = _validate_grok_response(incomplete)
+        result = _validate_llm_response(incomplete)
         assert result is None
 
     def test_probability_above_1_returns_none(self):
         data = _valid_grok_dict(estimated_probability=1.5)
-        result = _validate_grok_response(data)
+        result = _validate_llm_response(data)
         assert result is None
 
     def test_probability_as_string_coerced_to_float(self):
         data = _valid_grok_dict(estimated_probability="0.75", confidence="0.80")
-        result = _validate_grok_response(data)
+        result = _validate_llm_response(data)
         assert result is not None
         assert isinstance(result["estimated_probability"], float)
         assert result["estimated_probability"] == pytest.approx(0.75)
@@ -156,39 +158,39 @@ class TestValidateGrokResponse:
 
     def test_valid_response_passes(self):
         data = _valid_grok_dict()
-        result = _validate_grok_response(data)
+        result = _validate_llm_response(data)
         assert result is not None
         assert result["estimated_probability"] == pytest.approx(0.72)
 
     def test_negative_probability_returns_none(self):
         data = _valid_grok_dict(estimated_probability=-0.1)
-        result = _validate_grok_response(data)
+        result = _validate_llm_response(data)
         assert result is None
 
     def test_confidence_above_1_returns_none(self):
         data = _valid_grok_dict(confidence=1.01)
-        result = _validate_grok_response(data)
+        result = _validate_llm_response(data)
         assert result is None
 
     def test_missing_only_estimated_probability(self):
         """#11 — Response missing only 'estimated_probability' -> validation fails."""
         data = _valid_grok_dict()
         del data["estimated_probability"]
-        result = _validate_grok_response(data)
+        result = _validate_llm_response(data)
         assert result is None
 
     def test_missing_only_confidence(self):
         """#12 — Response missing only 'confidence' -> validation fails."""
         data = _valid_grok_dict()
         del data["confidence"]
-        result = _validate_grok_response(data)
+        result = _validate_llm_response(data)
         assert result is None
 
     def test_missing_only_reasoning(self):
         """#13 — Response missing only 'reasoning' -> validation fails."""
         data = _valid_grok_dict()
         del data["reasoning"]
-        result = _validate_grok_response(data)
+        result = _validate_llm_response(data)
         assert result is None
 
     def test_response_without_signal_info_types_passes(self):
@@ -198,14 +200,14 @@ class TestValidateGrokResponse:
             "confidence": 0.85,
             "reasoning": "Strong signal.",
         }
-        result = _validate_grok_response(data)
+        result = _validate_llm_response(data)
         assert result is not None
         assert result["estimated_probability"] == pytest.approx(0.72)
 
     def test_confidence_negative_returns_none(self):
         """#16 — confidence = -0.1 (below 0.0) -> validation fails."""
         data = _valid_grok_dict(confidence=-0.1)
-        result = _validate_grok_response(data)
+        result = _validate_llm_response(data)
         assert result is None
 
 
@@ -332,7 +334,7 @@ class TestCallGrokWithRetry:
             await grok.call_grok_with_retry("ctx", "market-4")
 
         db.increment_api_cost.assert_awaited_once_with(
-            "grok", tokens_in=200, tokens_out=80,
+            "minimax", tokens_in=200, tokens_out=80,
         )
 
     @pytest.mark.asyncio

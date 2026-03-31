@@ -30,7 +30,7 @@ def _build_scheduler() -> Scheduler:
     settings.COOLDOWN_DURATION_HOURS = 2.0
     settings.DAILY_API_BUDGET_USD = 8.0
     settings.MAX_TOTAL_EXPOSURE_PCT = 0.30
-    settings.GROK_MODEL = "grok-4.20-experimental-beta-0304-reasoning"
+    settings.LLM_MODEL = "MiniMax-M2.7"
     settings.MARKET_COOLDOWN_HOURS = 24.0
     settings.QUESTION_SIMILARITY_THRESHOLD = 0.60
     settings.MARKET_FETCH_LIMIT = 200

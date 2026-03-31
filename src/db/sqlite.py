@@ -463,10 +463,10 @@ class Database:
         self, service: str, tokens_in: int = 0, tokens_out: int = 0
     ) -> None:
         today = _utcnow().strftime("%Y-%m-%d")
-        # Estimate cost (rough pricing for Grok 4.1 Fast)
+        # Estimate cost (rough pricing for MiniMax M2)
         cost = 0.0
-        if service == "grok":
-            cost = tokens_in * 0.000005 + tokens_out * 0.000025  # approx
+        if service == "minimax":
+            cost = tokens_in * 0.000001 + tokens_out * 0.000005  # approx
         elif service == "twitter":
             cost = 0.0075  # per search
         await self._conn.execute(

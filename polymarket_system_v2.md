@@ -34,9 +34,9 @@
 > - 535 tests passing (was 503).
 >
 > **v2.6 changes:**
-> - Model upgraded to `grok-4.20-experimental-beta-0304-reasoning` via new configurable `GROK_MODEL` env var (no more hardcoded model names)
+> - Model upgraded to `MiniMax-M2.7` via new configurable `LLM_MODEL` env var (no more hardcoded model names)
 > - Added duplicate bet prevention: 24h cooldown after trading a market + Jaccard keyword-overlap similarity check (60% threshold) blocks near-duplicate questions. Skip reasons: `market_cooldown`, `similar_to_{id}`.
-> - Added daily self-check loop (Karpathy "Autoresearch" inspired): gathers metrics, calls Grok for analysis, persists `DailyReview` to DB + `data/daily_reviews/*.md`, sends Telegram alert with health status and recommendations. Does NOT auto-implement changes.
+> - Added daily self-check loop (Karpathy "Autoresearch" inspired): gathers metrics, calls MiniMax for analysis, persists `DailyReview` to DB + `data/daily_reviews/*.md`, sends Telegram alert with health status and recommendations. Does NOT auto-implement changes.
 > - Relaxed paper trading constraints for faster evaluation: `TIER1_MIN_EDGE` 4%→3%, market fetch 100→200 (now 1,500 via volume-sorted pagination), API budget $8→$15/day, paper mode min position $1→$0.50. Target: 5+ trades/day.
 > - New API endpoints: `GET /reviews` and `GET /reviews/{date}` for daily self-check reports.
 > - New DB table: `daily_reviews` (migration v4). New index on `trade_records(market_id, action)` (migration v3).
@@ -123,7 +123,7 @@ Everything you need before writing a single line of code.
 | Account | URL | What For | Cost | Setup Notes |
 |---------|-----|----------|------|-------------|
 | **Polymarket** | https://polymarket.com | Trading (paper then live) | Free to create; funded via USDC on Polygon | Need wallet (MetaMask/Rabby). KYC may be required for withdrawals. |
-| **xAI (Grok API)** | https://console.x.ai | LLM for probability estimation | Pay-as-you-go (~$6.42/mo) | API key needed. Model: configurable via `GROK_MODEL` env var (default: `grok-4.20-experimental-beta-0304-reasoning`). |
+| **MiniMax API** | https://api.minimaxi.chat | LLM for probability estimation | Pay-as-you-go | API key needed. Model: configurable via `LLM_MODEL` env var (default: `MiniMax-M2.7`). |
 | **TwitterAPI.io** | https://twitterapi.io | Social signal ingestion | Pay-as-you-go (~$15.30/mo) | API key needed. Unofficial Twitter API proxy. |
 | **Hetzner Cloud** | https://console.hetzner.cloud | VPS hosting (24/7 operation) | €4.35/mo (CX22) | EU datacenter. See Section 2 for setup. |
 | **GitHub** | https://github.com | Code repository + CI | Free | Private repo recommended. |
@@ -134,7 +134,7 @@ Everything you need before writing a single line of code.
 After creating accounts, generate and securely store these keys:
 
 ```
-XAI_API_KEY=xai-xxxxxxxxxxxxxxxxxxxx        # From console.x.ai → API Keys
+MINIMAX_API_KEY=sk-api-xxxxxxxxxxxxxxxxxxxx   # From MiniMax API dashboard
 TWITTER_API_KEY=xxxxxxxxxxxxxxxxxx           # From twitterapi.io → Dashboard
 POLYMARKET_API_KEY=xxxxxxxxxxxxxxxx          # From Polymarket CLOB API docs
 POLYMARKET_SECRET=xxxxxxxxxxxxxxxx           # CLOB trading credential
@@ -308,7 +308,7 @@ pip install -r requirements.txt
 # Create .env file (NEVER commit this to git)
 cat > ~/polymarket-bot/.env << 'EOF'
 # LLM
-XAI_API_KEY=xai-your-key-here
+MINIMAX_API_KEY=sk-api-your-key-here
 
 # Twitter
 TWITTER_API_KEY=your-key-here
@@ -461,7 +461,7 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| LLM | Grok (`grok-4.20-experimental-beta-0304-reasoning`, configurable via `GROK_MODEL`) | Best reasoning-per-dollar, no refusal on financial predictions |
+| LLM | MiniMax (`MiniMax-M2.7`, configurable via `LLM_MODEL`) | Strong reasoning, no refusal on financial predictions |
 | Social data | TwitterAPI.io ($0.15/1K tweets) | Full control over pre-filtering, cheaper than Grok X Search |
 | News data | RSS feeds (AP, Reuters, Bloomberg) | Free, real-time, headline-level sufficient as trigger (see 11.3) |
 | Strategy | Dual-tier (News Sniper + Crypto Opportunist) | Maximizes edge per dollar of OpEx |
@@ -816,7 +816,7 @@ class TradeRecord:
     record_id: str                    # UUID
     experiment_run: str               # e.g. "run_20260319_120000"
     timestamp: datetime
-    model_used: str                   # From GROK_MODEL env var
+    model_used: str                   # From LLM_MODEL env var
     
     market_id: str
     market_question: str
@@ -1145,9 +1145,9 @@ Optional parallel test: for 20-30 markets, send identical context to both old an
 
 ```bash
 python -m src.manage model_swap \
-  --old-model "grok-4.20-experimental-beta-0304-reasoning" \
-  --new-model "grok-5-fast" \
-  --reason "Grok 5 released, 30% reasoning improvement claimed, 2 weeks stable"
+  --old-model "MiniMax-M2.7" \
+  --new-model "MiniMax-M3" \
+  --reason "New model released, improvement validated"
 ```
 
 This triggers `handle_model_swap()`:

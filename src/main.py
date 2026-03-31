@@ -18,7 +18,7 @@ from src.alerts import format_lifecycle_alert, send_alert
 from src.config import Settings, get_settings
 from src.db.migrations import run_migrations
 from src.db.sqlite import Database
-from src.engine.grok_client import GrokClient
+from src.engine.grok_client import LLMClient
 from src.learning.calibration import CalibrationManager
 from src.learning.market_type import MarketTypeManager
 from src.learning.signal_tracker import SignalTrackerManager
@@ -115,7 +115,7 @@ async def lifespan(app: FastAPI):
             run_id=run_id,
             description="Auto-created on startup",
             config=settings.safe_config(),
-            model=settings.GROK_MODEL,
+            model=settings.LLM_MODEL,
             db=db,
         )
         log.info("experiment_created", run_id=run_id)
@@ -134,7 +134,7 @@ async def lifespan(app: FastAPI):
     polymarket = PolymarketClient(settings)
     twitter = TwitterDataPipeline(settings)
     rss = RSSPipeline()
-    grok = GrokClient(settings, db)
+    grok = LLMClient(settings, db)
 
     # Scheduler
     scheduler = Scheduler(

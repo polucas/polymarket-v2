@@ -62,7 +62,7 @@ def _build_scheduler() -> Scheduler:
     settings.MARKET_COOLDOWN_HOURS = 24.0
     settings.EVALUATION_COOLDOWN_HOURS = 2.0
     settings.QUESTION_SIMILARITY_THRESHOLD = 0.60
-    settings.GROK_MODEL = "grok-4.20-experimental-beta-0304-reasoning"
+    settings.LLM_MODEL = "MiniMax-M2.7"
     settings.MARKET_FETCH_LIMIT = 200
     settings.MARKET_PAGE_SIZE = 500
     settings.MARKET_FETCH_PAGES = 3

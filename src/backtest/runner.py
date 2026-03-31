@@ -8,10 +8,10 @@ from typing import Optional
 import structlog
 
 from src.backtest.clock import Clock
-from src.backtest.mocks import BacktestPolymarketClient, BacktestRSSPipeline, BacktestGrokClient, BacktestTwitterPipeline
+from src.backtest.mocks import BacktestPolymarketClient, BacktestRSSPipeline, BacktestLLMClient, BacktestTwitterPipeline
 from src.db.sqlite import Database
 from src.db.migrations import run_migrations
-from src.engine.grok_client import GrokClient
+from src.engine.grok_client import LLMClient
 from src.engine.resolution import auto_resolve_trades
 from src.learning.calibration import CalibrationManager
 from src.learning.experiments import start_experiment
@@ -57,7 +57,7 @@ class BacktestRunner:
 
         # Create experiment run (required by FK constraint on trade_records)
         run_id = f"backtest_{self._start_dt.strftime('%Y%m%d')}_{self._end_dt.strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
-        await start_experiment(run_id, f"Backtest {self._start_dt.date()} -> {self._end_dt.date()}", {}, self._settings.GROK_MODEL, db)
+        await start_experiment(run_id, f"Backtest {self._start_dt.date()} -> {self._end_dt.date()}", {}, self._settings.LLM_MODEL, db)
 
         # Learning managers (fresh state for this backtest)
         calibration_mgr = CalibrationManager()
@@ -72,9 +72,9 @@ class BacktestRunner:
         rss = BacktestRSSPipeline(self._backtest_data_db)
         twitter = BacktestTwitterPipeline(self._backtest_data_db)
 
-        # Real Grok with cache — GrokClient requires (settings, db)
-        real_grok = GrokClient(self._settings, db)
-        grok = BacktestGrokClient(real_grok, self._grok_cache_db)
+        # Real LLM with cache — LLMClient requires (settings, db)
+        real_llm = LLMClient(self._settings, db)
+        grok = BacktestLLMClient(real_llm, self._grok_cache_db)
 
         # Suppress Telegram alerts
         self._settings.TELEGRAM_BOT_TOKEN = ""

@@ -184,13 +184,13 @@ class TestPortfolio:
 @pytest.mark.asyncio
 class TestAPICosts:
     async def test_increment_new(self, db):
-        await db.increment_api_cost("grok", tokens_in=1000, tokens_out=200)
+        await db.increment_api_cost("minimax", tokens_in=1000, tokens_out=200)
         spend = await db.get_today_api_spend()
         assert spend > 0
 
     async def test_increment_existing(self, db):
-        await db.increment_api_cost("grok", tokens_in=1000)
-        await db.increment_api_cost("grok", tokens_in=1000)
+        await db.increment_api_cost("minimax", tokens_in=1000)
+        await db.increment_api_cost("minimax", tokens_in=1000)
         spend = await db.get_today_api_spend()
         # Should have accumulated two calls
         assert spend > 0

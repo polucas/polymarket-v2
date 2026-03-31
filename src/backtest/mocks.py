@@ -264,17 +264,17 @@ class BacktestRSSPipeline:
         pass  # No-op in backtest — consume_signals() queries directly
 
 
-class BacktestGrokClient:
-    """Wraps the real GrokClient with a SQLite-backed prompt cache.
+class BacktestLLMClient:
+    """Wraps the real LLMClient with a SQLite-backed prompt cache.
 
     Cache key: SHA256 of the context string.
     On cache hit: returns stored JSON immediately (free, deterministic).
-    On cache miss: calls real Grok API, stores result.
+    On cache miss: calls real MiniMax API, stores result.
     This ensures backtest evaluates actual LLM reasoning, not a random distribution.
     """
 
-    def __init__(self, real_grok_client, cache_db_path: str):
-        self._real_grok = real_grok_client
+    def __init__(self, real_llm_client, cache_db_path: str):
+        self._real_grok = real_llm_client
         self._cache_db_path = cache_db_path
         self._init_cache_db()
         self._hits = 0
@@ -325,11 +325,11 @@ class BacktestGrokClient:
         cached = self._cache_get(prompt_hash)
         if cached is not None:
             self._hits += 1
-            log.debug("grok_cache_hit", market_id=market_id, hits=self._hits)
+            log.debug("llm_cache_hit", market_id=market_id, hits=self._hits)
             return cached
 
         self._misses += 1
-        log.debug("grok_cache_miss", market_id=market_id, misses=self._misses)
+        log.debug("llm_cache_miss", market_id=market_id, misses=self._misses)
         result = await self._real_grok.call_grok_with_retry(context, market_id)
         if result is not None:
             self._cache_put(prompt_hash, market_id, result)
@@ -391,3 +391,7 @@ class BacktestTwitterPipeline:
                 log.warning("backtest_twitter_parse_error", error=str(e))
                 continue
         return signals
+
+
+# Backward-compat alias
+BacktestGrokClient = BacktestLLMClient

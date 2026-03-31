@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Automated prediction market trading bot targeting Polymarket. Detects news events, estimates probabilities via Grok LLM, compares to market prices, and trades when it finds an edge. Two tiers: Tier 1 (news-driven event markets, 15min-7d resolution) and Tier 2 (crypto, 15min resolution, trigger-based).
+Automated prediction market trading bot targeting Polymarket. Detects news events, estimates probabilities via MiniMax LLM, compares to market prices, and trades when it finds an edge. Two tiers: Tier 1 (news-driven event markets, 15min-7d resolution) and Tier 2 (crypto, 15min resolution, trigger-based).
 
 **Design doc:** `polymarket_system_v2.md` (v2.7, 2500+ lines) — the single source of truth for all system behavior. Consult it for rationale behind any design decision.
 
@@ -21,9 +21,9 @@ pytest tests/test_config.py           # Single file
 pytest -k "calibration"               # By keyword
 
 # CLI management
-python -m src.manage model_swap --old-model "grok-4.20-experimental-beta-0304-reasoning" --new-model "..." --reason "..."
+python -m src.manage model_swap --old-model "MiniMax-M2.7" --new-model "..." --reason "..."
 python -m src.manage void_trade --trade-id "<uuid>" --reason "..."
-python -m src.manage start_experiment --description "..." --model "grok-4.20-experimental-beta-0304-reasoning"
+python -m src.manage start_experiment --description "..." --model "MiniMax-M2.7"
 python -m src.manage end_experiment --run-id "<uuid>"
 python -m src.manage recalculate_learning
 ```
@@ -46,9 +46,9 @@ src/
 │   ├── twitter.py           # TwitterAPI.io client
 │   ├── rss.py               # RSS feed parser + 24h headline dedup + 30s signal accumulator
 │   ├── polymarket.py        # Gamma API (markets) + CLOB API (trading)
-│   └── context_builder.py   # Keyword extraction + Grok context formatting
+│   └── context_builder.py   # Keyword extraction + LLM context formatting
 ├── engine/
-│   ├── grok_client.py       # xAI API wrapper, 3-attempt retry, JSON parse fallback
+│   ├── grok_client.py       # MiniMax API wrapper (LLMClient), 3-attempt retry, JSON parse fallback
 │   ├── trade_decision.py    # Spread-aware edge calc, VWAP Kelly sizing, Monk Mode
 │   ├── trade_ranker.py      # Score = edge x confidence x time_value, cluster detection
 │   ├── execution.py         # Paper simulation (maker/taker) + live CLOB orders
@@ -75,7 +75,7 @@ docs/
 
 **Async throughout** — all I/O uses async/await (aiosqlite, httpx, APScheduler AsyncIOScheduler).
 
-**Learning system critical invariant:** Calibration uses RAW Grok probability, never adjusted. Market-type and signal trackers use ADJUSTED. Mixing these up causes self-referencing convergence. See `polymarket_system_v2.md` Section 7.
+**Learning system critical invariant:** Calibration uses RAW LLM probability, never adjusted. Market-type and signal trackers use ADJUSTED. Mixing these up causes self-referencing convergence. See `polymarket_system_v2.md` Section 7.
 
 **Adjustment pipeline order** (in `src/learning/adjustment.py`):
 1. Bayesian calibration correction (model-specific)
@@ -86,13 +86,13 @@ docs/
 
 **Risk management (Monk Mode):** Daily loss -5%, weekly -10%, consecutive adverse cooldown (3+), max exposure 30%, API budget $15/day. All enforced in `src/engine/trade_decision.py`.
 
-**Duplicate bet prevention:** 24h cooldown after trading a market (`MARKET_COOLDOWN_HOURS`), plus Jaccard keyword-overlap similarity check at 60% threshold (`QUESTION_SIMILARITY_THRESHOLD`) to block near-duplicate questions. Additionally, a 2h evaluation cooldown (`EVALUATION_COOLDOWN_HOURS`) prevents re-calling Grok on the same market within 2 hours (silent skip, no DB record). Skip reasons: `market_cooldown`, `similar_to_{id}`.
+**Duplicate bet prevention:** 24h cooldown after trading a market (`MARKET_COOLDOWN_HOURS`), plus Jaccard keyword-overlap similarity check at 60% threshold (`QUESTION_SIMILARITY_THRESHOLD`) to block near-duplicate questions. Additionally, a 2h evaluation cooldown (`EVALUATION_COOLDOWN_HOURS`) prevents re-calling MiniMax on the same market within 2 hours (silent skip, no DB record). Skip reasons: `market_cooldown`, `similar_to_{id}`.
 
-**Daily self-check (Autoresearch):** Runs 15 min after nightly summary. Gathers metrics (win rate, ROI, Brier by type, calibration drift, skip reasons), calls Grok for analysis, persists to `daily_reviews` table + `data/daily_reviews/*.md`, sends Telegram alert. Does NOT auto-implement changes.
+**Daily self-check (Autoresearch):** Runs 15 min after nightly summary. Gathers metrics (win rate, ROI, Brier by type, calibration drift, skip reasons), calls MiniMax for analysis, persists to `daily_reviews` table + `data/daily_reviews/*.md`, sends Telegram alert. Does NOT auto-implement changes.
 
-**Orderbook re-fetch after Grok:** The orderbook is fetched once before Grok is called, then re-fetched after `call_grok_with_retry()` returns. This prevents adverse selection: if latency bots sweep the book during the ~2-4s Grok call, the edge recalculation uses fresh prices. If the book moved against the prediction, edge will be negative and the trade is skipped. See `scheduler.py:_process_market()`.
+**Orderbook re-fetch after LLM:** The orderbook is fetched once before MiniMax is called, then re-fetched after `call_grok_with_retry()` returns. This prevents adverse selection: if latency bots sweep the book during the ~2-4s LLM call, the edge recalculation uses fresh prices. If the book moved against the prediction, edge will be negative and the trade is skipped. See `scheduler.py:_process_market()`.
 
-**Deterministic signal classification:** `info_type` (I1-I5) is assigned deterministically at signal creation time via `classify_info_type(source_tier)` in `src/pipelines/signal_classifier.py`. S1→I1, S2/S3→I2, S4→I3, S5→I4, S6→I5. This replaces the previous approach of asking Grok to classify signal types (which introduced subjective variance and lacked timestamps). Signal tags now include real publication timestamps, making temporal confidence decay actually operational.
+**Deterministic signal classification:** `info_type` (I1-I5) is assigned deterministically at signal creation time via `classify_info_type(source_tier)` in `src/pipelines/signal_classifier.py`. S1→I1, S2/S3→I2, S4→I3, S5→I4, S6→I5. This replaces the previous approach of asking the LLM to classify signal types (which introduced subjective variance and lacked timestamps). Signal tags now include real publication timestamps, making temporal confidence decay actually operational.
 
 **Temporal confidence decay (market-type specific):** Step 5 of `adjust_prediction()` decays confidence based on signal age. Rates vary by market type — crypto signals decay at 0.05/min (floor 0.40, grace 1min), while political/regulatory signals decay at 0.01-0.02/hr (floor 0.80-0.85, grace 1-2h). See `_DECAY_PARAMS` in `src/learning/adjustment.py`. Decay only fires when signal timestamps are present in `signal_tags`.
 
@@ -114,7 +114,7 @@ docs/
 
 ## Key Configuration
 
-- **Model:** `GROK_MODEL` env var, default `grok-4.20-experimental-beta-0304-reasoning` (configurable in `.env`)
+- **Model:** `LLM_MODEL` env var, default `MiniMax-M2.7` (configurable in `.env`)
 - **Bankroll:** $10,000 (set in `config.py` INITIAL_BANKROLL). Max bet $160 via `MAX_POSITION_PCT=0.016` applied to live `portfolio.total_equity`.
 - **Tier 1:** 15-min scan interval, resolution 15min-7d, 20 trades/day cap, 0% fee, 3% min edge
 - **Tier 2:** 2-3 min scan (only during active news window), 15-min resolution, 3 trades/day cap
@@ -146,16 +146,16 @@ docs/
 - Kelly sizing uses quarter Kelly (`KELLY_FRACTION=0.25`), not full Kelly. This is intentional conservatism.
 - Resolution window for Tier 1 is 15min to 7 days (was 1-24h, changed because that range was empty on Polymarket).
 - **TIER1_FEE_RATE must be 0.0** for fee-free markets. A non-zero value creates a phantom fee that eats into edge calculations and causes valid trades to fall below the minimum edge threshold.
-- **Skip records:** The scheduler saves SKIP trade records for all early returns (grok failure, position too small, market type disabled, low edge, market cooldown, similar question). These are essential for debugging "why didn't it trade?" — always check the `skip_reason` column.
-- **GROK_MODEL env var:** Model name is no longer hardcoded. Set `GROK_MODEL` in `.env` to change models. After changing, run `python -m src.manage model_swap` to reset calibration properly.
+- **Skip records:** The scheduler saves SKIP trade records for all early returns (llm failure, position too small, market type disabled, low edge, market cooldown, similar question). These are essential for debugging "why didn't it trade?" — always check the `skip_reason` column.
+- **LLM_MODEL env var:** Model name is no longer hardcoded. Set `LLM_MODEL` in `.env` to change models. After changing, run `python -m src.manage model_swap` to reset calibration properly.
 - **Paper mode relaxations:** Min position threshold is $0.50 in paper mode vs $1.00 in live. `TIER1_MIN_EDGE` defaults to 0.03 (can increase for live).
 - **Daily reviews:** Written to both DB (`daily_reviews` table) and `data/daily_reviews/YYYY-MM-DD.md`. Check `/reviews` endpoint or the markdown files for daily performance analysis.
 - **OrderBookLevel vs plain floats:** `OrderBook.bids` and `OrderBook.asks` are `List[OrderBookLevel]` (price + size), NOT plain floats. Bids are sorted descending by price, asks ascending, before slicing top 5 from the CLOB API. Tests using mock OrderBooks must use `OrderBookLevel` objects or mock the `spread`/`total_depth` properties.
-- **Evaluation cooldown:** Markets that received a Grok evaluation (including low_edge SKIPs) are silently skipped for 2 hours (`EVALUATION_COOLDOWN_HOURS`). No DB record is written for these skips to avoid bloating the `trade_records` table. This prevents wasteful repeated LLM calls on the same market when few markets pass the resolution filter.
+- **Evaluation cooldown:** Markets that received a MiniMax evaluation (including low_edge SKIPs) are silently skipped for 2 hours (`EVALUATION_COOLDOWN_HOURS`). No DB record is written for these skips to avoid bloating the `trade_records` table. This prevents wasteful repeated LLM calls on the same market when few markets pass the resolution filter.
 - **Early-exited trades have no actual_outcome:** They have PnL and `exit_type` set but `actual_outcome` is NULL. The learning system (calibration, Brier) correctly skips them. The `get_open_trades()` query filters `AND exit_type IS NULL` to avoid re-processing.
 - **VWAP returns price, not 1.0:** `compute_vwap()` returns `total_usd / total_shares` — the volume-weighted average *price* per share, not a USD ratio. VWAP is used in `kelly_size_vwap()` to cap position size at the depth where the trade remains profitable.
 - **RSS accumulator lock:** `poll_and_accumulate()` uses an `asyncio.Lock` to prevent race conditions with `consume_signals()`. The lock is per-instance, not global.
 - **WebSocket exit manager:** `RealTimeExitManager` in `src/engine/ws_exit.py` subscribes to YES tokens of open positions on the Polymarket market channel (`wss://ws-subscriptions-clob.polymarket.com/ws/market`). It calculates ROI from the best bid (sell price) and triggers instant TP/SL exits. The 5-min polling fallback in `check_early_exits()` catches anything missed during WS disconnects. Positions are tracked by `clob_token_id_yes` (stored in TradeRecord since migration v6).
 - **Pagination settings for mocked tests:** Tests that mock `Settings` with `spec=Settings` must set `MARKET_PAGE_SIZE`, `MARKET_FETCH_PAGES`, `MIN_TRADEABLE_PRICE`, and `MAX_TRADEABLE_PRICE` in addition to `MARKET_FETCH_LIMIT` for any test calling `get_active_markets()`.
-- **signal_tags format:** `signal_tags` passed to `adjust_prediction()` are now built from signal objects (not from Grok's response). Format: `[{"source_tier": "SX", "info_type": "IX", "timestamp": "ISO8601|None"}]`. `info_type` is assigned by `classify_info_type(source_tier)` at creation. Timestamps from RSS/Twitter publication time enable temporal decay in Step 5.
-- **Grok response no longer includes signal_info_types:** `REQUIRED_FIELDS` in `grok_client.py` is `{"estimated_probability", "confidence", "reasoning"}`. Grok is not asked to classify signals — this is done deterministically. Tests that build Grok response dicts should NOT include `signal_info_types`.
+- **signal_tags format:** `signal_tags` passed to `adjust_prediction()` are now built from signal objects (not from the LLM's response). Format: `[{"source_tier": "SX", "info_type": "IX", "timestamp": "ISO8601|None"}]`. `info_type` is assigned by `classify_info_type(source_tier)` at creation. Timestamps from RSS/Twitter publication time enable temporal decay in Step 5.
+- **LLM response no longer includes signal_info_types:** `REQUIRED_FIELDS` in `grok_client.py` is `{"estimated_probability", "confidence", "reasoning"}`. MiniMax is not asked to classify signals — this is done deterministically. Tests that build LLM response dicts should NOT include `signal_info_types`.

@@ -20,7 +20,7 @@ from src.alerts import (
 from src.config import MonkModeConfig, Settings
 from src.db.sqlite import Database
 from src.engine.execution import execute_trade
-from src.engine.grok_client import GrokClient
+from src.engine.grok_client import LLMClient
 from src.engine.resolution import auto_resolve_trades, check_early_exits, update_unrealized_adverse_moves
 from src.engine.trade_decision import (
     calculate_edge,
@@ -54,7 +54,7 @@ class Scheduler:
         polymarket: PolymarketClient,
         twitter: TwitterDataPipeline,
         rss: RSSPipeline,
-        grok: GrokClient,
+        grok: LLMClient,
         calibration_mgr: CalibrationManager,
         market_type_mgr: MarketTypeManager,
         signal_tracker_mgr: SignalTrackerManager,
@@ -298,7 +298,7 @@ class Scheduler:
                     record = await execute_trade(
                         candidate, portfolio, self._db, self._polymarket,
                         self._settings.ENVIRONMENT, experiment_run,
-                        model_used=self._settings.GROK_MODEL,
+                        model_used=self._settings.LLM_MODEL,
                     )
                     if record:
                         today_trades.append(record)
@@ -400,7 +400,7 @@ class Scheduler:
                     record = await execute_trade(
                         candidate, portfolio, self._db, self._polymarket,
                         self._settings.ENVIRONMENT, experiment_run,
-                        model_used=self._settings.GROK_MODEL,
+                        model_used=self._settings.LLM_MODEL,
                     )
                     if record:
                         today_trades.append(record)
@@ -647,7 +647,7 @@ class Scheduler:
             record_id=str(uuid.uuid4()),
             experiment_run=experiment_run,
             timestamp=Clock.utcnow(),
-            model_used=self._settings.GROK_MODEL,
+            model_used=self._settings.LLM_MODEL,
             market_id=market.market_id,
             market_question=market.question,
             market_type=market.market_type,
@@ -671,7 +671,7 @@ class Scheduler:
             record_id=str(uuid.uuid4()),
             experiment_run=experiment_run,
             timestamp=Clock.utcnow(),
-            model_used=self._settings.GROK_MODEL,
+            model_used=self._settings.LLM_MODEL,
             market_id=candidate.market.market_id,
             market_question=candidate.market.question,
             market_type=candidate.market.market_type,

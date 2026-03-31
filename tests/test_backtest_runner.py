@@ -22,7 +22,7 @@ def reset_clock():
 @pytest.fixture
 def minimal_settings():
     s = MagicMock()
-    s.GROK_MODEL = "grok-test"
+    s.LLM_MODEL = "minimax-test"
     s.INITIAL_BANKROLL = 10000.0
     s.TELEGRAM_BOT_TOKEN = ""
     s.TELEGRAM_CHAT_ID = ""

@@ -45,4 +45,4 @@ class TestSafeConfig:
 
     def test_secret_fields_is_frozen(self):
         assert isinstance(_SECRET_FIELDS, frozenset)
-        assert len(_SECRET_FIELDS) == 6
+        assert len(_SECRET_FIELDS) == 7

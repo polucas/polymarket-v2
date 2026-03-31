@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SECRET_FIELDS = frozenset({
-    "XAI_API_KEY", "TWITTER_API_KEY", "POLYMARKET_API_KEY",
+    "XAI_API_KEY", "MINIMAX_API_KEY", "TWITTER_API_KEY", "POLYMARKET_API_KEY",
     "POLYMARKET_SECRET", "POLYMARKET_PASSPHRASE", "TELEGRAM_BOT_TOKEN",
 })
 
@@ -10,6 +10,7 @@ _SECRET_FIELDS = frozenset({
 class Settings(BaseSettings):
     # API Keys
     XAI_API_KEY: str = ""
+    MINIMAX_API_KEY: str = ""
     TWITTER_API_KEY: str = ""
     POLYMARKET_API_KEY: str = ""
     POLYMARKET_SECRET: str = ""
@@ -21,7 +22,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "paper"  # "paper" or "live"
     DB_PATH: str = "data/predictor.db"
     LOG_LEVEL: str = "INFO"
-    GROK_MODEL: str = "grok-4.20-experimental-beta-0304-reasoning"
+    LLM_MODEL: str = "MiniMax-M2.7"
 
     # RSS Polling
     RSS_POLL_INTERVAL_SECONDS: int = 30
