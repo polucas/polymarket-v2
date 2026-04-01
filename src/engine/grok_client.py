@@ -21,6 +21,8 @@ REQUIRED_FIELDS = {"estimated_probability", "confidence", "reasoning"}
 def parse_json_safe(raw: str) -> Optional[dict]:
     """Parse JSON with multiple fallback strategies."""
     text = raw.strip()
+    # Strip <think>...</think> blocks (reasoning models like MiniMax-M2.7)
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     # Direct parse
     try:
         return json.loads(text)
@@ -33,9 +35,9 @@ def parse_json_safe(raw: str) -> Optional[dict]:
         return json.loads(fenced.strip())
     except (json.JSONDecodeError, ValueError):
         pass
-    # Find first {...} block
-    m = re.search(r'\{.*\}', text, re.DOTALL)
-    if m:
+    # Find last {...} block (reasoning models may have JSON at end)
+    matches = list(re.finditer(r'\{[^{}]*\}', text, re.DOTALL))
+    for m in reversed(matches):
         try:
             return json.loads(m.group())
         except (json.JSONDecodeError, ValueError):
@@ -74,7 +76,7 @@ class LLMClient:
         self._model = settings.LLM_MODEL
         self._timeout = httpx.Timeout(30.0, connect=10.0)
 
-    async def complete(self, prompt: str, max_tokens: int = 500) -> str:
+    async def complete(self, prompt: str, max_tokens: int = 2000) -> str:
         """Raw API call to MiniMax."""
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(
