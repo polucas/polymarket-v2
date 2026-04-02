@@ -445,10 +445,8 @@ class Scheduler:
     ) -> None:
         # Skip if we already have an open position on this market
         if market.market_id in open_market_ids:
-            log.info("market_already_has_open_position", market_id=market.market_id)
-            skip_record = self._build_skip_record(market, "already_has_open_position", experiment_run, tier)
-            await self._db.save_trade(skip_record)
-            return
+            log.debug("market_already_has_open_position", market_id=market.market_id)
+            return  # Silent skip — no DB record to avoid bloat
 
         # Skip if market was recently traded (cooldown window)
         if market.market_id in recently_traded_ids:
