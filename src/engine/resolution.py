@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 import structlog
 
@@ -36,14 +36,15 @@ def calculate_hypothetical_pnl(record: TradeRecord) -> float:
     return calculate_pnl(record, record.actual_outcome)
 
 
-async def auto_resolve_trades(db: Database, polymarket_client) -> None:
-    """Check and resolve open trades."""
+async def auto_resolve_trades(db: Database, polymarket_client) -> List[TradeRecord]:
+    """Check and resolve open trades. Returns list of newly resolved trades."""
     open_trades = await db.get_open_trades()
     if not open_trades:
-        return
+        return []
 
     portfolio = await db.load_portfolio()
     resolved_count = 0
+    newly_resolved: List[TradeRecord] = []
 
     for trade in open_trades:
         try:
@@ -100,6 +101,7 @@ async def auto_resolve_trades(db: Database, polymarket_client) -> None:
 
             await db.save_portfolio(portfolio)
             resolved_count += 1
+            newly_resolved.append(trade)
 
             log.info("trade_resolved",
                      market_id=trade.market_id,
@@ -114,6 +116,8 @@ async def auto_resolve_trades(db: Database, polymarket_client) -> None:
 
     if resolved_count:
         log.info("resolution_cycle_complete", resolved=resolved_count)
+
+    return newly_resolved
 
 
 def calculate_early_exit_pnl(record: TradeRecord, exit_price: float) -> float:

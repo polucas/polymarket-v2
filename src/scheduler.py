@@ -144,13 +144,15 @@ class Scheduler:
     async def _auto_resolve(self) -> None:
         try:
             await check_early_exits(self._db, self._polymarket, self._settings)
-            await auto_resolve_trades(self._db, self._polymarket)
-            # After resolution, trigger learning updates for newly resolved trades
-            resolved = await self._db.get_all_resolved_trades()
-            for r in resolved:
-                if r.resolved_at and r.brier_score_raw is not None:
-                    # Already processed
-                    pass
+            newly_resolved = await auto_resolve_trades(self._db, self._polymarket)
+            for trade in newly_resolved:
+                await on_trade_resolved(
+                    record=trade,
+                    calibration_mgr=self._calibration_mgr,
+                    market_type_mgr=self._market_type_mgr,
+                    signal_tracker_mgr=self._signal_tracker_mgr,
+                    db=self._db,
+                )
         except Exception as e:
             log.error("auto_resolve_error", error=str(e))
             await send_alert(format_error_alert(f"Auto-resolve failed: {e}"), self._settings)

@@ -130,6 +130,16 @@ async def lifespan(app: FastAPI):
     signal_tracker_mgr = SignalTrackerManager()
     await signal_tracker_mgr.load(db)
 
+    # Cold-start learning rebuild: if learning tables are empty but resolved trades exist,
+    # replay all resolved trades through the learning pipeline (fixes cases where the bot
+    # was running before the on_trade_resolved() bug was fixed).
+    if not any(b.sample_count > 0 for b in calibration_mgr.buckets):
+        resolved = await db.get_all_resolved_trades()
+        if resolved:
+            from src.learning.model_swap import recalculate_learning_from_scratch
+            await recalculate_learning_from_scratch(db, calibration_mgr, market_type_mgr, signal_tracker_mgr)
+            log.info("cold_start_learning_rebuild", resolved_trades=len(resolved))
+
     # Clients
     polymarket = PolymarketClient(settings)
     twitter = TwitterDataPipeline(settings)

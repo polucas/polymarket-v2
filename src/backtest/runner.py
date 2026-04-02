@@ -13,6 +13,7 @@ from src.db.sqlite import Database
 from src.db.migrations import run_migrations
 from src.engine.grok_client import LLMClient
 from src.engine.resolution import auto_resolve_trades
+from src.learning.adjustment import on_trade_resolved
 from src.learning.calibration import CalibrationManager
 from src.learning.experiments import start_experiment
 from src.learning.market_type import MarketTypeManager
@@ -104,7 +105,15 @@ class BacktestRunner:
 
         while Clock.utcnow() <= self._end_dt:
             await scheduler.run_tier1_scan()
-            await auto_resolve_trades(db, polymarket)
+            newly_resolved = await auto_resolve_trades(db, polymarket)
+            for trade in newly_resolved:
+                await on_trade_resolved(
+                    record=trade,
+                    calibration_mgr=calibration_mgr,
+                    market_type_mgr=market_type_mgr,
+                    signal_tracker_mgr=signal_tracker_mgr,
+                    db=db,
+                )
             Clock.advance(15)
             ticks += 1
 
