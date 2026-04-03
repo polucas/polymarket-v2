@@ -105,15 +105,12 @@ async def scrape_polymarket_markets(db_path: str, max_markets: int = 5000) -> in
 
                 for m in page:
                     try:
-                        # Parse prices
-                        outcomePrices = m.get("outcomePrices", "")
-                        if isinstance(outcomePrices, str) and outcomePrices:
-                            prices = json.loads(outcomePrices)
-                        elif isinstance(outcomePrices, list):
-                            prices = outcomePrices
-                        else:
-                            prices = [0.5, 0.5]
-                        baseline_price = float(prices[0]) if prices else 0.5
+                        # Use neutral baseline price (0.50) for all historical markets.
+                        # The Gamma API's outcomePrices for closed markets reflects the
+                        # FINAL price (near 1.0 or 0.0), which leaks the outcome to the
+                        # LLM and inflates win rates. A neutral price forces the LLM to
+                        # predict from the question + news context alone.
+                        baseline_price = 0.50
 
                         # actual_outcome
                         actual_outcome = None
