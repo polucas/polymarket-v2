@@ -112,11 +112,30 @@ async def scrape_polymarket_markets(db_path: str, max_markets: int = 5000) -> in
                         # predict from the question + news context alone.
                         baseline_price = 0.50
 
-                        # actual_outcome
+                        # actual_outcome: derived from outcomePrices on resolved markets.
+                        # Resolved markets have outcomePrices like ["1","0"] (YES won)
+                        # or ["0","1"] (NO won). Voided markets show ["0.5","0.5"].
                         actual_outcome = None
-                        res_prices = m.get("resolutionPrices", {})
-                        if res_prices:
-                            actual_outcome = "YES" if float(res_prices.get("0", 0)) > 0.5 else "NO"
+                        outcomePrices = m.get("outcomePrices", "")
+                        if isinstance(outcomePrices, str) and outcomePrices:
+                            try:
+                                op = json.loads(outcomePrices)
+                            except (json.JSONDecodeError, ValueError):
+                                op = None
+                        elif isinstance(outcomePrices, list):
+                            op = outcomePrices
+                        else:
+                            op = None
+                        if op and len(op) >= 2:
+                            try:
+                                yes_price = float(op[0])
+                                if yes_price > 0.5:
+                                    actual_outcome = "YES"
+                                elif yes_price < 0.5:
+                                    actual_outcome = "NO"
+                                # 0.5 = voided/cancelled, leave as None
+                            except (ValueError, TypeError):
+                                pass
 
                         # Dates
                         resolution_datetime = m.get("endDate") or m.get("end_date_iso")
