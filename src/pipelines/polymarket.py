@@ -6,33 +6,27 @@ from datetime import datetime, timezone
 
 from src.config import Settings
 from src.models import Market, OrderBook, OrderBookLevel
+from src.pipelines.market_classifier import classify_market_type
+
+# CLOB SDK — only required for live trading; imported at module level for testability.
+try:
+    from py_clob_client.client import ClobClient
+    from py_clob_client.clob_types import ApiCreds, OrderArgs
+except ImportError:  # pragma: no cover
+    ClobClient = None  # type: ignore[assignment]
+    ApiCreds = None  # type: ignore[assignment]
+    OrderArgs = None  # type: ignore[assignment]
 
 log = structlog.get_logger()
 
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 CLOB_API_BASE = "https://clob.polymarket.com"
 
-MARKET_TYPE_KEYWORDS = {
-    "political": ["president", "election", "congress", "senate", "vote", "political", "trump", "biden", "governor", "democrat", "republican"],
-    "economic": ["gdp", "inflation", "fed", "interest rate", "unemployment", "economy", "recession", "jobs", "cpi", "fomc"],
-    "crypto_15m": ["bitcoin", "btc", "ethereum", "eth", "crypto", "solana", "sol"],
-    "sports": ["nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball", "baseball", "championship", "super bowl"],
-    "cultural": ["oscar", "grammy", "emmy", "movie", "album", "show", "celebrity", "entertainment"],
-    "regulatory": ["sec", "regulation", "law", "ban", "approve", "fda", "ruling", "court"],
-}
-
 
 class PolymarketClient:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._timeout = httpx.Timeout(15.0, connect=5.0)
-
-    def _classify_market_type(self, question: str, tags: list = None) -> str:
-        q_lower = question.lower()
-        for mtype, keywords in MARKET_TYPE_KEYWORDS.items():
-            if any(kw in q_lower for kw in keywords):
-                return mtype
-        return "political"  # default
 
     async def get_active_markets(self, tier: int, tier1_fee_rate: float = 0.0, tier2_fee_rate: float = 0.04) -> List[Market]:
         """Get active markets filtered by tier criteria.
@@ -104,7 +98,7 @@ class PolymarketClient:
                         pass
 
                 question = m.get("question", "")
-                market_type = self._classify_market_type(question, m.get("tags", []))
+                market_type = classify_market_type(question)
 
                 volume_24h = float(m.get("volume24hr", 0) or 0)
                 liquidity = float(m.get("liquidity", 0) or 0)
@@ -116,9 +110,26 @@ class PolymarketClient:
                 resolved = m.get("closed", False) or m.get("resolved", False)
                 resolution = None
                 if resolved:
-                    res_prices = m.get("resolutionPrices", {})
-                    if res_prices:
-                        resolution = "YES" if float(res_prices.get("0", 0)) > 0.5 else "NO"
+                    # Gamma API uses outcomePrices, not resolutionPrices
+                    op_raw_r = m.get("outcomePrices", "")
+                    if isinstance(op_raw_r, str) and op_raw_r:
+                        try:
+                            op_r = json.loads(op_raw_r)
+                        except (json.JSONDecodeError, ValueError):
+                            op_r = None
+                    elif isinstance(op_raw_r, list):
+                        op_r = op_raw_r
+                    else:
+                        op_r = None
+                    if op_r and len(op_r) >= 2:
+                        try:
+                            yes_price_r = float(op_r[0])
+                            if yes_price_r > 0.5:
+                                resolution = "YES"
+                            elif yes_price_r < 0.5:
+                                resolution = "NO"
+                        except (ValueError, TypeError):
+                            pass
 
                 # Extract CLOB token IDs
                 clob_token_ids_raw = m.get("clobTokenIds", "[]")
@@ -228,9 +239,29 @@ class PolymarketClient:
                 resolved = m.get("closed", False) or m.get("resolved", False)
                 resolution = None
                 if resolved:
-                    res_prices = m.get("resolutionPrices", {})
-                    if res_prices:
-                        resolution = "YES" if float(res_prices.get("0", 0)) > 0.5 else "NO"
+                    # Gamma API uses outcomePrices (a JSON-encoded list like ["1","0"] or
+                    # ["0","1"]) — there is no resolutionPrices field (fixed in commit 65b8caa
+                    # for backtest data_ingestion; mirrored here).
+                    op_raw = m.get("outcomePrices", "")
+                    if isinstance(op_raw, str) and op_raw:
+                        try:
+                            op = json.loads(op_raw)
+                        except (json.JSONDecodeError, ValueError):
+                            op = None
+                    elif isinstance(op_raw, list):
+                        op = op_raw
+                    else:
+                        op = None
+                    if op and len(op) >= 2:
+                        try:
+                            yes_price_resolved = float(op[0])
+                            if yes_price_resolved > 0.5:
+                                resolution = "YES"
+                            elif yes_price_resolved < 0.5:
+                                resolution = "NO"
+                            # 0.5 = voided/cancelled, leave as None
+                        except (ValueError, TypeError):
+                            pass
 
                 question = m.get("question", "")
                 return Market(
@@ -238,7 +269,7 @@ class PolymarketClient:
                     question=question,
                     yes_price=yes_price,
                     no_price=no_price,
-                    market_type=self._classify_market_type(question),
+                    market_type=classify_market_type(question),
                     resolved=resolved,
                     resolution=resolution,
                     keywords=[w.lower() for w in question.split() if len(w) > 3][:10],
@@ -247,26 +278,51 @@ class PolymarketClient:
             log.error("market_get_failed", market_id=market_id, error=str(e))
             return None
 
-    async def place_order(self, market_id: str, side: str, price: float, size: float) -> dict:
-        """Place order via CLOB API. Only for live mode."""
+    async def place_order(
+        self,
+        clob_token_id: str,
+        price: float,
+        size: float,
+        side: str = "BUY",
+    ) -> dict:
+        """Place a BUY order for a specific ERC-1155 outcome token via CLOB API.
+
+        To buy YES shares, pass the market's clob_token_id_yes.
+        To buy NO shares, pass the market's clob_token_id_no.
+        Side is always "BUY" when opening a position — the direction is encoded
+        by which token_id you target.
+
+        Only executes in ENVIRONMENT=live. Paper mode returns a rejected response.
+        """
         if self._settings.ENVIRONMENT != "live":
             log.warning("place_order_called_in_paper_mode")
             return {"status": "rejected", "reason": "paper_mode"}
 
         try:
-            from py_clob_client.client import ClobClient
+            # Level 2 auth: host + private key (L1) + API creds (L2).
+            # funder is required for proxy/smart wallets; leave None for EOA.
+            funder = self._settings.POLYMARKET_FUNDER_ADDRESS or None
             clob = ClobClient(
                 host=CLOB_API_BASE,
-                key=self._settings.POLYMARKET_API_KEY,
+                key=self._settings.POLYMARKET_PRIVATE_KEY,
                 chain_id=137,
+                creds=ApiCreds(
+                    api_key=self._settings.POLYMARKET_API_KEY,
+                    api_secret=self._settings.POLYMARKET_SECRET,
+                    api_passphrase=self._settings.POLYMARKET_PASSPHRASE,
+                ),
+                funder=funder,
             )
-            order = clob.create_and_post_order({
-                "tokenID": market_id,
-                "side": "BUY" if "YES" in side.upper() else "SELL",
-                "price": price,
-                "size": size,
-            })
+            # OrderArgs uses token_id (snake_case), not tokenID.
+            # side is always "BUY" — the token_id encodes YES vs NO direction.
+            order_args = OrderArgs(
+                token_id=clob_token_id,
+                price=price,
+                size=size,
+                side=side.upper(),
+            )
+            order = clob.create_and_post_order(order_args)
             return {"status": "submitted", "order": order}
         except Exception as e:
-            log.error("order_failed", market_id=market_id, error=str(e))
+            log.error("order_failed", token_id=clob_token_id, error=str(e))
             return {"status": "error", "error": str(e)}

@@ -11,7 +11,7 @@ import pytest
 
 from src.config import Settings
 from src.models import Market, OrderBook, OrderBookLevel
-from src.pipelines.polymarket import PolymarketClient, MARKET_TYPE_KEYWORDS
+from src.pipelines.polymarket import PolymarketClient
 
 
 # ---------------------------------------------------------------------------
@@ -247,11 +247,13 @@ class TestMarketTypeClassification:
             ("Will the NBA finals go to game 7?", "sports"),
             ("Will this movie win an Oscar?", "cultural"),
             ("Will the SEC approve the ETF?", "regulatory"),
-            ("Will a cozy rain occur on Friday?", "political"),  # default fallback
+            ("Will a cozy rain occur on Friday?", "weather"),  # now matches weather type
+            ("Will the next major product launch be successful?", "unknown"),  # unknown fallback
         ],
     )
     def test_classify_market_type(self, client, question, expected_type):
-        result = client._classify_market_type(question)
+        from src.pipelines.market_classifier import classify_market_type
+        result = classify_market_type(question)
         assert result == expected_type
 
 
@@ -385,12 +387,52 @@ class TestErrorHandling:
 class TestPlaceOrder:
     @pytest.mark.asyncio
     async def test_paper_mode_rejected(self):
-        """Paper mode place_order returns rejected status."""
+        """Paper mode place_order returns rejected status regardless of token_id."""
         settings = _make_settings(ENVIRONMENT="paper")
         client = PolymarketClient(settings)
-        result = await client.place_order("market-1", "BUY_YES", 0.60, 50.0)
+        # New signature: clob_token_id, price, size, side="BUY"
+        result = await client.place_order("token-yes-123", 0.60, 50.0)
         assert result["status"] == "rejected"
         assert result["reason"] == "paper_mode"
+
+    @pytest.mark.asyncio
+    async def test_live_mode_uses_correct_token_id_and_side(self):
+        """Live mode creates order with token_id and always-BUY side via OrderArgs."""
+        from unittest.mock import MagicMock, patch
+
+        settings = _make_settings(
+            ENVIRONMENT="live",
+            POLYMARKET_PRIVATE_KEY="0xdeadbeef",
+            POLYMARKET_API_KEY="api-key",
+        )
+        client = PolymarketClient(settings)
+
+        mock_order_result = {"orderID": "order-abc", "status": "live"}
+        mock_clob = MagicMock()
+        mock_clob.create_and_post_order.return_value = mock_order_result
+
+        with patch("src.pipelines.polymarket.ClobClient", return_value=mock_clob) as mock_cls:
+            result = await client.place_order(
+                clob_token_id="token-yes-999",
+                price=0.55,
+                size=20.0,
+                side="BUY",
+            )
+
+        assert result["status"] == "submitted"
+        assert result["order"] == mock_order_result
+
+        # Verify ClobClient was constructed with private key (not empty market_id)
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs["key"] == "0xdeadbeef"
+        assert init_kwargs["chain_id"] == 137
+
+        # Verify OrderArgs was constructed with token_id (not tokenID), side=BUY
+        called_args = mock_clob.create_and_post_order.call_args[0][0]
+        assert called_args.token_id == "token-yes-999"
+        assert called_args.side == "BUY"
+        assert called_args.price == 0.55
+        assert called_args.size == 20.0
 
 
 # ---------------------------------------------------------------------------

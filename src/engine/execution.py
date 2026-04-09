@@ -85,11 +85,18 @@ async def execute_trade(
     else:
         # Live execution
         try:
+            # Determine the correct ERC-1155 token ID based on the trade direction.
+            # BUY_YES → target the YES token; BUY_NO → target the NO token.
+            # Side is always "BUY" — the token_id encodes direction on Polymarket's CLOB.
+            if candidate.side == "BUY_NO":
+                clob_token_id = market.clob_token_id_no
+            else:
+                clob_token_id = market.clob_token_id_yes
             order_result = await polymarket_client.place_order(
-                market_id=market.market_id,
-                side=candidate.side,
+                clob_token_id=clob_token_id,
                 price=candidate.market_price,
                 size=candidate.position_size,
+                side="BUY",
             )
             if order_result.get("status") == "error":
                 log.error("live_order_failed", market_id=market.market_id, error=order_result.get("error"))

@@ -230,6 +230,8 @@ def _make_candidate(**overrides) -> TradeCandidate:
         yes_price=0.60,
         no_price=0.40,
         market_type="political",
+        clob_token_id_yes="tok-yes-001",
+        clob_token_id_no="tok-no-001",
     )
     defaults = {
         "market": market,
@@ -339,13 +341,40 @@ class TestExecuteTradeLive:
         )
 
         assert record is not None
+        # New signature: clob_token_id (BUY_YES → yes token), price, size, side="BUY"
         mock_client.place_order.assert_awaited_once_with(
-            market_id="mkt-test-001",
-            side="BUY_YES",
+            clob_token_id="tok-yes-001",
             price=0.60,
             size=200.0,
+            side="BUY",
         )
         mock_db.save_trade.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_trade_live_mode_buy_no_uses_no_token(self):
+        """BUY_NO must target the NO ERC-1155 token id, side still 'BUY'."""
+        candidate = _make_candidate(side="BUY_NO", market_price=0.40)
+        portfolio = Portfolio(cash_balance=5000.0, open_positions=[])
+        mock_db = AsyncMock()
+        mock_client = AsyncMock()
+        mock_client.place_order.return_value = {"status": "ok"}
+
+        record = await execute_trade(
+            candidate=candidate,
+            portfolio=portfolio,
+            db=mock_db,
+            polymarket_client=mock_client,
+            environment="live",
+            experiment_run="test-run",
+        )
+
+        assert record is not None
+        mock_client.place_order.assert_awaited_once_with(
+            clob_token_id="tok-no-001",
+            price=0.40,
+            size=200.0,
+            side="BUY",
+        )
 
 
 class TestExecuteTradePortfolioUpdate:

@@ -15,6 +15,9 @@ _DECAY_PARAMS: dict = {
     "sports":     {"rate": 0.04, "per_min": False, "floor": 0.75, "grace_min": 30.0},
     "cultural":   {"rate": 0.02, "per_min": False, "floor": 0.80, "grace_min": 120.0},
     "regulatory": {"rate": 0.01, "per_min": False, "floor": 0.85, "grace_min": 120.0},
+    "weather":      {"rate": 0.03, "per_min": False, "floor": 0.75, "grace_min": 30.0},
+    "esports":      {"rate": 0.04, "per_min": False, "floor": 0.75, "grace_min": 30.0},
+    "geopolitical": {"rate": 0.01, "per_min": False, "floor": 0.85, "grace_min": 120.0},
     "_default":   {"rate": 0.05, "per_min": False, "floor": 0.85, "grace_min": 60.0},
 }
 

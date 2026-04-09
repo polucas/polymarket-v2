@@ -45,4 +45,5 @@ class TestSafeConfig:
 
     def test_secret_fields_is_frozen(self):
         assert isinstance(_SECRET_FIELDS, frozenset)
-        assert len(_SECRET_FIELDS) == 7
+        # 7 original fields + POLYMARKET_PRIVATE_KEY + POLYMARKET_FUNDER_ADDRESS (added Phase C)
+        assert len(_SECRET_FIELDS) == 9

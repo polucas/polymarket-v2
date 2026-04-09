@@ -16,23 +16,7 @@ GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 GDELT_MASTERFILELIST = "http://data.gdeltproject.org/gdeltv2/masterfilelist.txt"
 DEFAULT_DOMAINS = ["reuters.com", "apnews.com", "bbc.com", "bloomberg.com", "coindesk.com"]
 
-# Copied from src/pipelines/polymarket.py — do not import from there to avoid dep chain
-MARKET_TYPE_KEYWORDS = {
-    "political": ["president", "election", "congress", "senate", "vote", "political", "trump", "biden", "governor", "democrat", "republican"],
-    "economic": ["gdp", "inflation", "fed", "interest rate", "unemployment", "economy", "recession", "jobs", "cpi", "fomc"],
-    "crypto_15m": ["bitcoin", "btc", "ethereum", "eth", "crypto", "solana", "sol"],
-    "sports": ["nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball", "baseball", "championship", "super bowl"],
-    "cultural": ["oscar", "grammy", "emmy", "movie", "album", "show", "celebrity", "entertainment"],
-    "regulatory": ["sec", "regulation", "law", "ban", "approve", "fda", "ruling", "court"],
-}
-
-
-def _classify_market_type(question: str) -> str:
-    q_lower = question.lower()
-    for mtype, keywords in MARKET_TYPE_KEYWORDS.items():
-        if any(kw in q_lower for kw in keywords):
-            return mtype
-    return "political"
+from src.pipelines.market_classifier import classify_market_type
 
 
 def init_backtest_db(db_path: str) -> None:
@@ -143,7 +127,7 @@ async def scrape_polymarket_markets(db_path: str, max_markets: int = 5000) -> in
 
                         question = m.get("question", "")
                         market_id = str(m.get("id", m.get("condition_id", "")))
-                        market_type = _classify_market_type(question)
+                        market_type = classify_market_type(question)
 
                         conn.execute(
                             """INSERT OR IGNORE INTO historical_markets

@@ -1,14 +1,15 @@
-"""Tests for TIER1_FEE_RATE correction and edge calculation impact."""
+"""Tests for fee rate configuration and edge calculation impact."""
 from __future__ import annotations
 
 import pytest
 
 from src.config import Settings
 from src.engine.trade_decision import calculate_edge
+from src.pipelines.market_classifier import MARKET_TYPE_FEES, get_fee_rate
 
 
 class TestTier1FeeRateDefault:
-    """Verify TIER1_FEE_RATE defaults to 0.0 (fee-free markets)."""
+    """Verify TIER1_FEE_RATE defaults to 0.0 (fallback for unmapped types)."""
 
     def test_settings_default_tier1_fee_is_zero(self):
         """Settings class should default TIER1_FEE_RATE to 0.0."""
@@ -27,6 +28,40 @@ class TestTier1FeeRateDefault:
             _env_file=None,
         )
         assert settings.TIER2_FEE_RATE == 0.04
+
+
+class TestMarketTypeFees:
+    """Verify MARKET_TYPE_FEES and get_fee_rate() reflect Q1 2026 fee schedule."""
+
+    def test_political_fee_is_zero(self):
+        """Political markets are still fee-free."""
+        assert MARKET_TYPE_FEES["political"] == 0.0
+
+    def test_geopolitical_fee_is_zero(self):
+        """Geopolitical markets are still fee-free."""
+        assert MARKET_TYPE_FEES["geopolitical"] == 0.0
+
+    def test_crypto_15m_fee_nonzero(self):
+        """Crypto markets now have a real taker fee."""
+        assert get_fee_rate("crypto_15m") > 0.0
+
+    def test_crypto_15m_fee_value(self):
+        """Crypto peak taker fee is 1.56%."""
+        assert get_fee_rate("crypto_15m") == pytest.approx(0.0156)
+
+    def test_get_fee_rate_returns_correct_value(self):
+        """get_fee_rate returns the MARKET_TYPE_FEES entry for known types."""
+        assert get_fee_rate("political") == 0.0
+        assert get_fee_rate("sports") == pytest.approx(0.02)
+        assert get_fee_rate("unknown") == pytest.approx(0.02)
+
+    def test_get_fee_rate_unmapped_uses_default(self):
+        """An unmapped market type uses the caller-supplied default."""
+        assert get_fee_rate("brand_new_type", default=0.03) == pytest.approx(0.03)
+
+    def test_get_fee_rate_unmapped_uses_builtin_default(self):
+        """An unmapped market type falls back to 0.02 if no default is given."""
+        assert get_fee_rate("brand_new_type") == pytest.approx(0.02)
 
 
 class TestEdgeCalculationWithZeroFee:

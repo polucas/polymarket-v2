@@ -1,4 +1,4 @@
-"""Tests for market fee_rate from config."""
+"""Tests for market fee_rate from config and per-type fee schedule."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.config import Settings
+from src.pipelines.market_classifier import get_fee_rate
 from src.pipelines.polymarket import PolymarketClient
 
 
@@ -84,3 +85,21 @@ class TestMarketFeeRate:
 
         if markets:  # Only if it passes crypto filter
             assert markets[0].fee_rate == 0.04
+
+
+@pytest.mark.parametrize("market_type,expected_fee", [
+    ("political", 0.0),
+    ("geopolitical", 0.0),
+    ("economic", 0.0),
+    ("crypto_15m", 0.0156),
+    ("sports", 0.02),
+    ("esports", 0.02),
+    ("weather", 0.0),
+    ("unknown", 0.02),
+])
+def test_get_fee_rate(market_type, expected_fee):
+    assert get_fee_rate(market_type) == pytest.approx(expected_fee)
+
+
+def test_get_fee_rate_unmapped_uses_default():
+    assert get_fee_rate("brand_new_type", default=0.03) == pytest.approx(0.03)

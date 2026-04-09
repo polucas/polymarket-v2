@@ -25,6 +25,9 @@ KEYWORD_SUPPLEMENTS = {
     "sports": ["game", "match", "score"],
     "cultural": ["entertainment", "media"],
     "regulatory": ["regulation", "policy", "ruling"],
+    "weather": ["temperature", "forecast", "precipitation"],
+    "esports": ["gaming", "tournament", "match"],
+    "geopolitical": ["international", "conflict", "diplomacy"],
 }
 
 

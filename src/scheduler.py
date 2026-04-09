@@ -39,6 +39,7 @@ from src.learning.market_type import MarketTypeManager
 from src.learning.signal_tracker import SignalTrackerManager
 from src.models import Market, Signal, TradeCandidate, TradeRecord
 from src.pipelines.context_builder import build_grok_context, extract_keywords
+from src.pipelines.market_classifier import get_fee_rate
 from src.pipelines.polymarket import PolymarketClient
 from src.pipelines.rss import RSSPipeline
 from src.pipelines.twitter import TwitterDataPipeline
@@ -550,7 +551,12 @@ class Scheduler:
         )
 
         # Calculate edge and side
-        fee_rate = self._settings.TIER1_FEE_RATE if tier == 1 else self._settings.TIER2_FEE_RATE
+        # Fee lookup: prefer per-market-type fee (Q1 2026 schedule), fall back to
+        # tier-based config var for unmapped types. See src/pipelines/market_classifier.py.
+        fee_rate = get_fee_rate(
+            market.market_type,
+            default=self._settings.TIER1_FEE_RATE if tier == 1 else self._settings.TIER2_FEE_RATE,
+        )
         side = determine_side(adj_prob, market.yes_price)
         edge = calculate_spread_adjusted_edge(
             adj_prob, market.yes_price, fee_rate, side,

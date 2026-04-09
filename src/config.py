@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _SECRET_FIELDS = frozenset({
     "XAI_API_KEY", "MINIMAX_API_KEY", "TWITTER_API_KEY", "POLYMARKET_API_KEY",
     "POLYMARKET_SECRET", "POLYMARKET_PASSPHRASE", "TELEGRAM_BOT_TOKEN",
+    "POLYMARKET_PRIVATE_KEY", "POLYMARKET_FUNDER_ADDRESS",
 })
 
 
@@ -13,8 +14,10 @@ class Settings(BaseSettings):
     MINIMAX_API_KEY: str = ""
     TWITTER_API_KEY: str = ""
     POLYMARKET_API_KEY: str = ""
-    POLYMARKET_SECRET: str = ""
-    POLYMARKET_PASSPHRASE: str = ""
+    POLYMARKET_SECRET: str = ""      # L2 ApiCreds api_secret — used by ClobClient for CLOB authentication
+    POLYMARKET_PASSPHRASE: str = ""  # L2 ApiCreds api_passphrase — used by ClobClient for CLOB authentication
+    POLYMARKET_PRIVATE_KEY: str = ""          # Wallet private key for signing CLOB orders (0x-prefixed hex)
+    POLYMARKET_FUNDER_ADDRESS: str = ""       # Proxy/funder wallet address (for smart wallets)
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
