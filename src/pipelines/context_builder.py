@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import structlog
@@ -63,6 +64,18 @@ def extract_keywords(market_id: str, market_question: str, market_type: str) -> 
     return keywords
 
 
+def _format_signal_age(signal: Signal) -> str:
+    """Format signal age as human-readable string."""
+    if not signal.timestamp:
+        return "age unknown"
+    age_min = (datetime.now(timezone.utc) - signal.timestamp).total_seconds() / 60
+    if age_min < 0:
+        return "future?"
+    if age_min < 120:
+        return f"{int(age_min)}min ago"
+    return f"{age_min / 60:.1f}h ago"
+
+
 def build_grok_context(
     market: Market,
     twitter_signals: List[Signal],
@@ -83,12 +96,16 @@ def build_grok_context(
     ob_depth = total_bids + total_asks
     ob_skew = (total_bids - total_asks) / max(ob_depth, 1) if ob_depth > 0 else 0
 
-    # Build signal text
+    # Build signal text with age
     signal_lines = []
     for i, s in enumerate(all_signals, 1):
         source_label = f"[{s.source_tier}|{s.source}]"
+        age_str = _format_signal_age(s)
         headline_tag = " [HEADLINE-ONLY]" if s.headline_only else ""
-        signal_lines.append(f"  {i}. {source_label} @{s.author} (cred={s.credibility:.2f}): {s.content[:200]}{headline_tag}")
+        signal_lines.append(
+            f"  {i}. {source_label} {age_str} (cred={s.credibility:.2f}): "
+            f"{s.content[:200]}{headline_tag}"
+        )
 
     signals_text = "\n".join(signal_lines) if signal_lines else "  No signals available."
 
@@ -98,25 +115,55 @@ def build_grok_context(
     except (TypeError, AttributeError):
         spread_line = ""
 
-    context = f"""MARKET ANALYSIS REQUEST
+    market_type_label = market.market_type or "unknown"
 
-Market Question: {market.question}
-Current YES price: {market.yes_price:.4f}
+    context = f"""MARKET ANALYSIS — {market_type_label}
+
+Question: {market.question}
+Current YES price: {market.yes_price:.4f} (market consensus)
 Current NO price: {market.no_price:.4f}
 Resolution: {market.hours_to_resolution:.1f} hours
-Volume (24h): ${market.volume_24h:,.0f}
-Liquidity: ${market.liquidity:,.0f}
 Orderbook depth: ${ob_depth:,.0f} (skew: {ob_skew:+.2f}){spread_line}
 
 SIGNALS:
 {signals_text}
 
 INSTRUCTIONS:
-1. Analyze the signals and market context
-2. Estimate the probability of YES outcome
-3. Rate your confidence in the estimate
+1. Consider why the market price ({market.yes_price:.4f}) might already be correct
+2. Identify specific evidence from signals that suggests mispricing
+3. If signals are stale, weak, or ambiguous, stay close to market price
+4. Estimate true probability and your confidence
 
-Respond with ONLY this JSON (no markdown, no extra text):
-{{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "..."}}"""
+Return ONLY: {{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "Why market is wrong: [evidence]. Counter: [why market might be right]."}}"""
 
     return context
+
+
+def build_prescreen_context(
+    market: Market,
+    rss_signals: List[Signal],
+    orderbook: OrderBook,
+) -> str:
+    """Build a lightweight context for pre-screen LLM call (no Twitter signals)."""
+    total_bids = sum(l.size for l in orderbook.bids) if orderbook.bids else 0
+    total_asks = sum(l.size for l in orderbook.asks) if orderbook.asks else 0
+    ob_depth = total_bids + total_asks
+    ob_skew = (total_bids - total_asks) / max(ob_depth, 1) if ob_depth > 0 else 0
+
+    # Top 3 RSS signals only
+    top_rss = sorted(rss_signals, key=lambda s: s.credibility, reverse=True)[:3]
+    signal_lines = []
+    for i, s in enumerate(top_rss, 1):
+        age_str = _format_signal_age(s)
+        signal_lines.append(f"  {i}. [{s.source_tier}|{s.source}] {age_str}: {s.content[:150]}")
+    signals_text = "\n".join(signal_lines) if signal_lines else "  No signals."
+
+    return f"""QUICK SCREEN — is this market likely mispriced?
+Question: {market.question}
+YES: {market.yes_price:.4f}, NO: {market.no_price:.4f}
+Resolution: {market.hours_to_resolution:.1f}h
+OB depth: ${ob_depth:,.0f} (skew: {ob_skew:+.2f})
+
+{signals_text}
+
+Return ONLY: {{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "one sentence"}}"""

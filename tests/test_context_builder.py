@@ -10,6 +10,8 @@ from src.models import Market, Signal, OrderBook, OrderBookLevel
 from src.pipelines.context_builder import (
     extract_keywords,
     build_grok_context,
+    build_prescreen_context,
+    _format_signal_age,
     _keyword_cache,
     KEYWORD_SUPPLEMENTS,
 )
@@ -201,20 +203,18 @@ class TestBuildGrokContext:
         """Signals should be sorted by credibility descending, top 7 only."""
         market = _make_market()
         signals = [
-            _make_signal(content=f"Signal {i}", credibility=0.1 * i, author=f"auth{i}")
+            _make_signal(content=f"Signal {i} unique_{i}", credibility=0.1 * i, author=f"auth{i}")
             for i in range(1, 11)  # 10 signals
         ]
         ctx = build_grok_context(market, signals, [], _make_orderbook())
 
         # Highest credibility is 1.0 (i=10), lowest included is 0.4 (i=4)
         # The top 7: i=10,9,8,7,6,5,4
-        assert "auth10" in ctx
-        assert "auth9" in ctx
-        assert "auth4" in ctx
+        assert "unique_10" in ctx
+        assert "unique_9" in ctx
+        assert "unique_4" in ctx
         # i=3 (0.3 cred) should be excluded
-        assert "auth3" not in ctx
-        # i=1 (0.1 cred) should be excluded — use word boundary to avoid matching "auth10"
-        assert "@auth1 " not in ctx and "@auth1)" not in ctx
+        assert "unique_3" not in ctx
 
     def test_output_contains_orderbook_depth_and_skew(self):
         """Output should contain orderbook depth dollar amount and skew value."""
@@ -232,7 +232,6 @@ class TestBuildGrokContext:
         assert "estimated_probability" in ctx
         assert "confidence" in ctx
         assert "reasoning" in ctx
-        assert "JSON" in ctx
         # signal_info_types removed from prompt: info_type is now assigned deterministically
         assert "signal_info_types" not in ctx
 
@@ -248,23 +247,23 @@ class TestBuildGrokContext:
         """Twitter and RSS signals are merged and sorted together."""
         market = _make_market()
         twitter_signals = [
-            _make_signal(content="Twitter high", credibility=0.95, source="twitter", author="tw_top"),
-            _make_signal(content="Twitter low", credibility=0.30, source="twitter", author="tw_low"),
+            _make_signal(content="Twitter high unique_tw_top", credibility=0.95, source="twitter", author="tw_top"),
+            _make_signal(content="Twitter low unique_tw_low", credibility=0.30, source="twitter", author="tw_low"),
         ]
         rss_signals = [
-            _make_signal(content="RSS mid", credibility=0.70, source="rss", author="rss_mid"),
+            _make_signal(content="RSS mid unique_rss_mid", credibility=0.70, source="rss", author="rss_mid"),
         ]
         ctx = build_grok_context(market, twitter_signals, rss_signals, _make_orderbook())
 
         # All three should appear (total <= 7)
-        assert "tw_top" in ctx
-        assert "tw_low" in ctx
-        assert "rss_mid" in ctx
+        assert "unique_tw_top" in ctx
+        assert "unique_tw_low" in ctx
+        assert "unique_rss_mid" in ctx
 
         # Verify ordering: tw_top (0.95) should come before rss_mid (0.70)
-        pos_tw_top = ctx.index("tw_top")
-        pos_rss_mid = ctx.index("rss_mid")
-        pos_tw_low = ctx.index("tw_low")
+        pos_tw_top = ctx.index("unique_tw_top")
+        pos_rss_mid = ctx.index("unique_rss_mid")
+        pos_tw_low = ctx.index("unique_tw_low")
         assert pos_tw_top < pos_rss_mid < pos_tw_low
 
     def test_output_contains_resolution_time(self):
@@ -273,12 +272,12 @@ class TestBuildGrokContext:
         ctx = build_grok_context(market, [], [], _make_orderbook())
         assert "36.5" in ctx
 
-    def test_output_contains_volume_and_liquidity(self):
-        """#38 — Output string contains volume and liquidity dollar amounts."""
+    def test_output_does_not_contain_volume_and_liquidity(self):
+        """Volume/liquidity removed from prompt — irrelevant noise for probability estimation."""
         market = _make_market(volume_24h=123_456.0, liquidity=78_900.0)
         ctx = build_grok_context(market, [], [], _make_orderbook())
-        assert "$123,456" in ctx
-        assert "$78,900" in ctx
+        assert "$123,456" not in ctx
+        assert "$78,900" not in ctx
 
     def test_signal_lines_show_source_tier_label(self):
         """#41 — Each signal line in context shows source tier label like '[S2|twitter]'."""
@@ -329,3 +328,101 @@ class TestBuildGrokContext:
         # With empty bids and asks, ob_depth=0, skew should be 0
         # Verify the context string is still valid and contains the market question
         assert market.question in ctx
+
+    def test_output_contains_market_type(self):
+        """Prompt header includes market type for domain-aware reasoning."""
+        market = _make_market(market_type="sports")
+        ctx = build_grok_context(market, [], [], _make_orderbook())
+        assert "MARKET ANALYSIS — sports" in ctx
+
+    def test_output_contains_market_consensus_label(self):
+        """YES price labeled as 'market consensus' for anchoring."""
+        market = _make_market(yes_price=0.62)
+        ctx = build_grok_context(market, [], [], _make_orderbook())
+        assert "market consensus" in ctx
+
+    def test_output_contains_adversarial_instructions(self):
+        """Prompt asks LLM to consider why market price might be correct."""
+        market = _make_market()
+        ctx = build_grok_context(market, [], [], _make_orderbook())
+        assert "might already be correct" in ctx
+        assert "why market might be right" in ctx.lower() or "Counter" in ctx
+
+    def test_signal_age_shown_in_output(self):
+        """Signals display age (e.g., '45min ago') instead of @author."""
+        from datetime import timedelta
+        market = _make_market()
+        sig = _make_signal(content="Breaking news")
+        sig.timestamp = datetime.now(timezone.utc) - timedelta(minutes=45)
+        ctx = build_grok_context(market, [sig], [], _make_orderbook())
+        assert "45min ago" in ctx
+
+    def test_no_signals_text(self):
+        """When no signals, shows 'No signals available'."""
+        market = _make_market()
+        ctx = build_grok_context(market, [], [], _make_orderbook())
+        assert "No signals available" in ctx
+
+
+# ---------------------------------------------------------------------------
+# _format_signal_age
+# ---------------------------------------------------------------------------
+
+
+class TestFormatSignalAge:
+    def test_none_timestamp(self):
+        sig = _make_signal()
+        sig.timestamp = None
+        assert _format_signal_age(sig) == "age unknown"
+
+    def test_recent_signal(self):
+        from datetime import timedelta
+        sig = _make_signal()
+        sig.timestamp = datetime.now(timezone.utc) - timedelta(minutes=30)
+        assert "30min ago" in _format_signal_age(sig)
+
+    def test_old_signal_hours(self):
+        from datetime import timedelta
+        sig = _make_signal()
+        sig.timestamp = datetime.now(timezone.utc) - timedelta(hours=3)
+        result = _format_signal_age(sig)
+        assert "h ago" in result
+
+
+# ---------------------------------------------------------------------------
+# build_prescreen_context
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPrescreenContext:
+    def test_no_twitter_signals_in_prescreen(self):
+        """Pre-screen context takes no Twitter signals parameter."""
+        market = _make_market()
+        ctx = build_prescreen_context(market, [], _make_orderbook())
+        assert "QUICK SCREEN" in ctx
+        assert market.question in ctx
+
+    def test_max_3_rss_signals(self):
+        """Pre-screen caps at 3 RSS signals."""
+        market = _make_market()
+        signals = [
+            _make_signal(content=f"RSS signal {i}", credibility=0.1 * i, source="rss")
+            for i in range(1, 8)  # 7 signals
+        ]
+        ctx = build_prescreen_context(market, signals, _make_orderbook())
+        # Count signal lines (numbered 1., 2., 3.)
+        assert "  1." in ctx
+        assert "  3." in ctx
+        assert "  4." not in ctx
+
+    def test_prescreen_contains_prices(self):
+        market = _make_market(yes_price=0.75, no_price=0.25)
+        ctx = build_prescreen_context(market, [], _make_orderbook())
+        assert "0.7500" in ctx
+        assert "0.2500" in ctx
+
+    def test_prescreen_no_volume_liquidity(self):
+        market = _make_market(volume_24h=999_999.0, liquidity=888_888.0)
+        ctx = build_prescreen_context(market, [], _make_orderbook())
+        assert "999,999" not in ctx
+        assert "888,888" not in ctx

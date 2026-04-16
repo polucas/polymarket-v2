@@ -17,6 +17,23 @@ MINIMAX_API_BASE = "https://api.minimaxi.chat/v1"
 MAX_RETRIES = 2
 REQUIRED_FIELDS = {"estimated_probability", "confidence", "reasoning"}
 
+SYSTEM_PROMPT = """You are a prediction market analyst. Your job: estimate the true probability of market outcomes.
+
+KEY PRINCIPLES:
+- Markets are generally efficient. The current price IS the consensus probability. Only deviate when signals provide clear, specific evidence of mispricing.
+- Extraordinary claims require extraordinary evidence. A 20%+ deviation from market price needs multiple strong, recent signals.
+- HEADLINE-ONLY signals have no article body — discount them significantly.
+- Older signals are less reliable. A 6-hour-old signal on a 2-hour market is nearly worthless.
+
+CONFIDENCE SCALE (be precise):
+- 0.25-0.40: Weak/stale signals, headline-only, single low-credibility source
+- 0.40-0.60: Moderate evidence from 1-2 credible sources, but ambiguous
+- 0.60-0.80: Strong evidence from multiple credible sources, clear direction
+- 0.80-0.95: Very strong multi-source confirmation, breaking/official news
+- >0.95: Reserved for officially confirmed outcomes only
+
+OUTPUT FORMAT: Return ONLY valid JSON, no markdown or extra text."""
+
 
 def parse_json_safe(raw: str) -> Optional[dict]:
     """Parse JSON with multiple fallback strategies."""
@@ -76,8 +93,15 @@ class LLMClient:
         self._model = settings.LLM_MODEL
         self._timeout = httpx.Timeout(30.0, connect=10.0)
 
-    async def complete(self, prompt: str, max_tokens: int = 2000) -> str:
+    async def complete(
+        self, prompt: str, max_tokens: int = 2000, system_prompt: str = SYSTEM_PROMPT,
+    ) -> str:
         """Raw API call to MiniMax."""
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(
                 f"{MINIMAX_API_BASE}/chat/completions",
@@ -87,7 +111,7 @@ class LLMClient:
                 },
                 json={
                     "model": self._model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": 0.1,
                 },
@@ -138,6 +162,32 @@ class LLMClient:
         log.error("llm_all_retries_failed", market_id=market_id)
         await self._db.record_parse_failure(market_id)
         return None
+
+    async def call_prescreen(self, context: str, market_id: str) -> Optional[dict]:
+        """Cheap pre-screen LLM call. 1 retry, 300 max_tokens, fail-open (None = proceed)."""
+        for attempt in range(2):  # max 2 attempts (1 retry)
+            try:
+                raw = await self.complete(context, max_tokens=300)
+                parsed = parse_json_safe(raw)
+                if parsed is None:
+                    log.warning("prescreen_parse_failed", attempt=attempt, market_id=market_id)
+                    if attempt == 0:
+                        await asyncio.sleep(1.0)
+                    continue
+                validated = _validate_llm_response(parsed)
+                if validated is None:
+                    log.warning("prescreen_validation_failed", attempt=attempt, market_id=market_id)
+                    if attempt == 0:
+                        await asyncio.sleep(1.0)
+                    continue
+                return validated
+            except Exception as e:
+                log.warning("prescreen_error", error=str(e), attempt=attempt, market_id=market_id)
+                if attempt == 0:
+                    await asyncio.sleep(1.0)
+
+        log.info("prescreen_failed_passthrough", market_id=market_id)
+        return None  # fail-open
 
 
 # Backward-compat alias

@@ -38,7 +38,7 @@ from src.learning.experiments import get_current_experiment
 from src.learning.market_type import MarketTypeManager
 from src.learning.signal_tracker import SignalTrackerManager
 from src.models import Market, Signal, TradeCandidate, TradeRecord
-from src.pipelines.context_builder import build_grok_context, extract_keywords
+from src.pipelines.context_builder import build_grok_context, build_prescreen_context, extract_keywords
 from src.pipelines.market_classifier import get_fee_rate
 from src.pipelines.polymarket import PolymarketClient
 from src.pipelines.rss import RSSPipeline
@@ -490,14 +490,34 @@ class Scheduler:
         # Extract keywords
         keywords = extract_keywords(market.market_id, market.question, market.market_type)
 
-        # Fetch Twitter signals
-        twitter_signals = await self._twitter.get_signals_for_market(keywords)
-
         # Filter RSS signals relevant to this market
         relevant_rss = [
             s for s in rss_signals
             if any(kw.lower() in s.content.lower() for kw in keywords[:5])
         ]
+
+        # --- PRE-SCREEN GATE: cheap LLM check before expensive Twitter call ---
+        if self._settings.PRESCREEN_ENABLED:
+            orderbook_pre = await self._polymarket.get_orderbook(market.clob_token_id_yes, market.market_id)
+            prescreen_ctx = build_prescreen_context(market, relevant_rss, orderbook_pre)
+            prescreen_result = await self._grok.call_prescreen(prescreen_ctx, market.market_id)
+
+            if prescreen_result is not None:
+                pre_prob = prescreen_result["estimated_probability"]
+                pre_conf = prescreen_result["confidence"]
+                raw_edge = abs(pre_prob - market.yes_price)
+                if pre_conf < self._settings.PRESCREEN_MIN_CONFIDENCE or raw_edge < self._settings.PRESCREEN_MIN_EDGE:
+                    skip_record = self._build_skip_record(
+                        market, f"prescreen_filtered_edge={raw_edge:.3f}_conf={pre_conf:.2f}",
+                        experiment_run, tier, grok_prob=pre_prob, grok_conf=pre_conf,
+                        reasoning=prescreen_result.get("reasoning", ""),
+                    )
+                    await self._db.save_trade(skip_record)
+                    return
+            # prescreen_result is None (LLM failed) → fall through to full eval
+
+        # Fetch Twitter signals (only for markets that passed pre-screen)
+        twitter_signals = await self._twitter.get_signals_for_market(keywords)
 
         # Update tier2 last signal time if crypto signals found
         if tier == 2 and (twitter_signals or relevant_rss):

@@ -74,6 +74,7 @@ def _build_scheduler() -> Scheduler:
     settings.TAKE_PROFIT_ROI = 0.20
     settings.STOP_LOSS_ROI = -0.15
     settings.EARLY_EXIT_ENABLED = True
+    settings.PRESCREEN_ENABLED = False
 
     db = AsyncMock()
     polymarket = AsyncMock()

@@ -38,6 +38,7 @@ def _build_scheduler() -> Scheduler:
     settings.MARKET_FETCH_PAGES = 3
     settings.MIN_TRADEABLE_PRICE = 0.05
     settings.MAX_TRADEABLE_PRICE = 0.95
+    settings.PRESCREEN_ENABLED = False
 
     db = AsyncMock()
     polymarket = AsyncMock()

@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     EVALUATION_COOLDOWN_HOURS: float = 2.0  # Skip re-calling Grok on same market within this window
     QUESTION_SIMILARITY_THRESHOLD: float = 0.60
 
+    # Pre-screen: cheap LLM gate before Twitter API call
+    PRESCREEN_ENABLED: bool = True
+    PRESCREEN_MIN_EDGE: float = 0.05        # raw |prob - price| gate (intentionally loose)
+    PRESCREEN_MIN_CONFIDENCE: float = 0.35   # LLM confidence gate
+    PRESCREEN_MAX_TOKENS: int = 300          # small response budget
+
     # Alerts
     DAILY_SUMMARY_HOUR_UTC: int = 0  # Hour of day (UTC) to send daily summary
 

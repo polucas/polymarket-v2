@@ -15,6 +15,7 @@ from src.engine.grok_client import (
     _validate_llm_response,
     REQUIRED_FIELDS,
     MAX_RETRIES,
+    SYSTEM_PROMPT,
 )
 
 
@@ -467,3 +468,132 @@ class TestCallGrokWithRetry:
         assert mock_sleep.await_count == 2
         calls = [c.args[0] for c in mock_sleep.await_args_list]
         assert calls == [1.0, 2.0]
+
+
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
+
+
+class TestSystemPrompt:
+    @pytest.mark.asyncio
+    async def test_complete_sends_system_message(self):
+        """API call includes system message with SYSTEM_PROMPT."""
+        db = _mock_db()
+        settings = _mock_settings()
+        grok = LLMClient(settings, db)
+
+        valid_json = json.dumps(_valid_grok_dict())
+        api_resp = _make_xai_response(valid_json)
+
+        mock_http_resp = MagicMock(spec=httpx.Response)
+        mock_http_resp.status_code = 200
+        mock_http_resp.json.return_value = api_resp
+        mock_http_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.engine.grok_client.httpx.AsyncClient", return_value=mock_client):
+            await grok.complete("test prompt")
+
+        # Verify messages include system + user
+        call_kwargs = mock_client.post.call_args
+        messages = call_kwargs.kwargs["json"]["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert "prediction market analyst" in messages[0]["content"]
+        assert messages[1]["role"] == "user"
+        assert messages[1]["content"] == "test prompt"
+
+
+# ---------------------------------------------------------------------------
+# call_prescreen
+# ---------------------------------------------------------------------------
+
+
+class TestCallPrescreen:
+    @pytest.mark.asyncio
+    async def test_prescreen_uses_300_max_tokens(self):
+        """Pre-screen passes max_tokens=300."""
+        db = _mock_db()
+        settings = _mock_settings()
+        grok = LLMClient(settings, db)
+
+        valid_json = json.dumps(_valid_grok_dict())
+        api_resp = _make_xai_response(valid_json)
+
+        mock_http_resp = MagicMock(spec=httpx.Response)
+        mock_http_resp.status_code = 200
+        mock_http_resp.json.return_value = api_resp
+        mock_http_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.engine.grok_client.httpx.AsyncClient", return_value=mock_client):
+            result = await grok.call_prescreen("prescreen ctx", "market-pre")
+
+        assert result is not None
+        call_kwargs = mock_client.post.call_args
+        assert call_kwargs.kwargs["json"]["max_tokens"] == 300
+
+    @pytest.mark.asyncio
+    async def test_prescreen_single_retry_then_none(self):
+        """Pre-screen: 2 failures → returns None (fail-open), only 2 attempts total."""
+        db = _mock_db()
+        settings = _mock_settings()
+        grok = LLMClient(settings, db)
+
+        bad_content = "not json"
+        api_resp = _make_xai_response(bad_content)
+
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = api_resp
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.engine.grok_client.httpx.AsyncClient", return_value=mock_client), \
+             patch("src.engine.grok_client.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await grok.call_prescreen("ctx", "market-pre-fail")
+
+        assert result is None
+        # Only 2 attempts (1 retry), so 1 sleep call
+        assert mock_sleep.await_count == 1
+        assert mock_client.post.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_prescreen_success_returns_validated(self):
+        """Pre-screen success returns validated dict."""
+        db = _mock_db()
+        settings = _mock_settings()
+        grok = LLMClient(settings, db)
+
+        valid_json = json.dumps(_valid_grok_dict(estimated_probability=0.45, confidence=0.30))
+        api_resp = _make_xai_response(valid_json)
+
+        mock_http_resp = MagicMock(spec=httpx.Response)
+        mock_http_resp.status_code = 200
+        mock_http_resp.json.return_value = api_resp
+        mock_http_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.engine.grok_client.httpx.AsyncClient", return_value=mock_client):
+            result = await grok.call_prescreen("ctx", "market-pre-ok")
+
+        assert result is not None
+        assert result["estimated_probability"] == pytest.approx(0.45)
+        assert result["confidence"] == pytest.approx(0.30)
