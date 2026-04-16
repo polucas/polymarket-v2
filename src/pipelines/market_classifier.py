@@ -53,7 +53,7 @@ MARKET_TYPE_KEYWORDS: dict[str, list[str]] = {
     "political": [
         "president", "election", "congress", "senate", "vote", "political",
         "trump", "biden", "governor", "democrat", "republican", "primary",
-        "campaign", "ballot",
+        "campaign", "ballot", "referendum", "redistricting",
     ],
     "sports": [
         # Leagues and sports
@@ -67,10 +67,14 @@ MARKET_TYPE_KEYWORDS: dict[str, list[str]] = {
         "moneyline", "first half", "halftime",
         # Common scoring terms
         "goals", "points spread", "total goals", "total points",
+        # Team win patterns ("Will X FC win", "Will X win on 2026-")
+        " win on 20", "fc win", " win on april", " win on may",
     ],
     "cultural": [
         "oscar", "grammy", "emmy", "movie", "album", "show", "celebrity",
         "entertainment", "box office", "billboard",
+        # Social media / influencer activity
+        "elon musk", "post ", "tweets", "tweet from",
     ],
 }
 
