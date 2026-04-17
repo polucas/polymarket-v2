@@ -4,7 +4,7 @@
 
 Automated prediction market trading bot targeting Polymarket. Detects news events, estimates probabilities via MiniMax LLM, compares to market prices, and trades when it finds an edge. Two tiers: Tier 1 (news-driven event markets, 15min-7d resolution) and Tier 2 (crypto, 15min resolution, trigger-based).
 
-**Design doc:** `polymarket_system_v2.md` (v2.7, 2500+ lines) — the single source of truth for all system behavior. Consult it for rationale behind any design decision.
+**Design doc:** `polymarket_system_v2.md` (v2.10, 2500+ lines) — the single source of truth for all system behavior. Consult it for rationale behind any design decision.
 
 ## Commands
 
@@ -35,7 +35,7 @@ src/
 ├── main.py                  # FastAPI app + lifespan (experiment auto-creation, file logging, startup/shutdown alerts)
 ├── config.py                # Pydantic Settings (40+ env vars) + MonkModeConfig
 ├── models.py                # 22 dataclasses (Signal, Market, OrderBookLevel, TradeRecord, Portfolio, DailyReview, etc.)
-├── alerts.py                # Telegram alerting (10 alert types, incl. early exit)
+├── alerts.py                # Telegram alerting (9 alert types: trade, daily summary, error, observe-only, monk mode, tier2, lifecycle, stale scan, early exit)
 ├── scheduler.py             # APScheduler: Tier 1 (15min), RSS (30s), resolution (5min), early exit, daily summary, self-check
 ├── manage.py                # CLI: model_swap, void_trade, experiments
 ├── db/
@@ -48,7 +48,7 @@ src/
 │   ├── polymarket.py        # Gamma API (markets) + CLOB API (trading)
 │   └── context_builder.py   # Keyword extraction + LLM context formatting
 ├── engine/
-│   ├── grok_client.py       # MiniMax API wrapper (LLMClient), 3-attempt retry, JSON parse fallback
+│   ├── grok_client.py       # MiniMax API wrapper (LLMClient), 3-attempt retry, call_prescreen() (1 retry, 300 tokens, fail-open), JSON parse fallback
 │   ├── trade_decision.py    # Spread-aware edge calc, VWAP Kelly sizing, Monk Mode
 │   ├── trade_ranker.py      # Score = edge x confidence x time_value, cluster detection
 │   ├── execution.py         # Paper simulation (maker/taker) + live CLOB orders
@@ -108,7 +108,11 @@ docs/
 
 **Early exit (TP/SL):** Real-time WebSocket monitoring (`src/engine/ws_exit.py`) subscribes to Polymarket's market channel for YES tokens of open positions. On book update, best bid is checked against TP (+20% ROI) and SL (-15% ROI) thresholds for instant exit. The 5-min polling loop (`check_early_exits()`) is kept as fallback when WS is disconnected. Early-exited trades have PnL but no `actual_outcome` — excluded from Brier/calibration metrics. Feature flag: `EARLY_EXIT_ENABLED`.
 
-**RSS signal accumulator:** RSS feeds poll independently every 30s (`RSS_POLL_INTERVAL_SECONDS`) via `poll_and_accumulate()`. Tier 1 scan consumes accumulated signals via `consume_signals()`. Tier 2 still calls `get_breaking_news()` directly.
+**Two-stage pre-screen gate:** Before calling Twitter ($0.0075/market) and the full LLM, a cheap pre-screen LLM call runs first (max_tokens=300, 1 retry, fail-open). It uses only RSS signals + orderbook — no Twitter. If pre-screen confidence < `PRESCREEN_MIN_CONFIDENCE` (default 0.25) OR raw edge < `PRESCREEN_MIN_EDGE` (default 0.05), the market is skipped with `skip_reason='prescreen_filtered_edge=X_conf=Y'` (recorded to DB). If the pre-screen LLM call fails/returns None, the market falls through to full evaluation (fail-open). Controlled by `PRESCREEN_ENABLED` (default true). Filters ~25-40% of markets, saving both Twitter + full LLM cost. See `scheduler.py:_process_market()` and `call_prescreen()` in `grok_client.py`.
+
+**LLM system prompt:** `SYSTEM_PROMPT` constant in `src/engine/grok_client.py` frames the LLM as a prediction market analyst. Key directives: markets are generally efficient (current price IS consensus); 20%+ deviation requires multiple strong recent signals; HEADLINE-ONLY signals must be discounted; older signals are less reliable. Confidence scale defined 0.25–0.95. This prompt is included as the system message in every API call (both full eval and pre-screen).
+
+**RSS signal accumulator:** RSS feeds poll independently every 30s (`RSS_POLL_INTERVAL_SECONDS`) via `poll_and_accumulate()`. Tier 1 scan consumes accumulated signals via `consume_signals()` — these RSS signals are used by both the pre-screen gate (top 3) and the full LLM context (merged with Twitter). Tier 2 still calls `get_breaking_news()` directly.
 
 **Trade scoring:** `edge x adjusted_confidence x (1.0 / max(resolution_hours, 0.5))`. Candidates are ranked per scan cycle, not first-come-first-served. Cluster detection prevents overexposure to correlated markets.
 
@@ -118,7 +122,8 @@ docs/
 - **Bankroll:** $10,000 (set in `config.py` INITIAL_BANKROLL). Max bet $160 via `MAX_POSITION_PCT=0.016` applied to live `portfolio.total_equity`.
 - **Tier 1:** 15-min scan interval, resolution 15min-7d, 20 trades/day cap, 0% fee, 3% min edge
 - **Tier 2:** 2-3 min scan (only during active news window), 15-min resolution, 3 trades/day cap
-- **Market fetch:** 3 pages x 500 markets sorted by volume (`MARKET_PAGE_SIZE=500`, `MARKET_FETCH_PAGES=3`) = up to 1,500 most active markets per scan
+- **Market fetch:** 2 pages x 500 markets sorted by volume (`MARKET_PAGE_SIZE=500`, `MARKET_FETCH_PAGES=2`) = up to 1,000 most active markets per scan
+- **Pre-screen gate:** `PRESCREEN_ENABLED=true`, `PRESCREEN_MIN_EDGE=0.05`, `PRESCREEN_MIN_CONFIDENCE=0.25`, `PRESCREEN_MAX_TOKENS=300` — cheap LLM check before Twitter fetch; filters ~25-40% of markets
 - **Price filter:** Skip markets outside 5%-95% YES range (`MIN_TRADEABLE_PRICE=0.05`, `MAX_TRADEABLE_PRICE=0.95`)
 - **API budget:** $15/day (`DAILY_API_BUDGET_USD=15.0`)
 - **Duplicate prevention:** 24h market cooldown, 2h evaluation cooldown, 60% question similarity threshold
@@ -145,18 +150,18 @@ docs/
 - The `seen_headlines` dict in RSS pipeline uses a bounded 24h TTL to prevent memory leaks. Don't remove that bound.
 - Kelly sizing uses quarter Kelly (`KELLY_FRACTION=0.25`), not full Kelly. This is intentional conservatism.
 - Resolution window for Tier 1 is 15min to 7 days (was 1-24h, changed because that range was empty on Polymarket).
-- **Fees are per-market-type** (as of Q1 2026). See `MARKET_TYPE_FEES` in `src/pipelines/market_classifier.py`. Crypto markets incur ~1.56% taker fees; sports/esports ~2%; political/geopolitical/economic/cultural/regulatory/weather are still 0%. The `TIER1_FEE_RATE` env var only applies as a fallback for market types not in `MARKET_TYPE_FEES`. We use maker orders, so actual fees may be lower (or rebates) in practice — the schedule here represents the conservative taker-cost ceiling.
+- **Fees are per-market-type** (as of Q1 2026). See `MARKET_TYPE_FEES` in `src/pipelines/market_classifier.py`. Market types: `crypto_15m` (~1.56%), `sports`/`esports` (~2%), `political`/`geopolitical`/`economic`/`cultural`/`regulatory`/`weather` (0%), unknown (2% fallback). Classification is keyword-based via `MARKET_TYPE_KEYWORDS` dict in `market_classifier.py`. The `TIER1_FEE_RATE` env var only applies as fallback for unclassified types. We use maker orders, so actual fees may be lower (or rebates) in practice.
 - **Skip records:** The scheduler saves SKIP trade records for all early returns (llm failure, position too small, market type disabled, low edge, market cooldown, similar question). These are essential for debugging "why didn't it trade?" — always check the `skip_reason` column.
 - **LLM_MODEL env var:** Model name is no longer hardcoded. Set `LLM_MODEL` in `.env` to change models. After changing, run `python -m src.manage model_swap` to reset calibration properly.
 - **Paper mode relaxations:** Min position threshold is $0.50 in paper mode vs $1.00 in live. `TIER1_MIN_EDGE` defaults to 0.03 (can increase for live).
 - **Daily reviews:** Written to both DB (`daily_reviews` table) and `data/daily_reviews/YYYY-MM-DD.md`. Check `/reviews` endpoint or the markdown files for daily performance analysis.
 - **OrderBookLevel vs plain floats:** `OrderBook.bids` and `OrderBook.asks` are `List[OrderBookLevel]` (price + size), NOT plain floats. Bids are sorted descending by price, asks ascending, before slicing top 5 from the CLOB API. Tests using mock OrderBooks must use `OrderBookLevel` objects or mock the `spread`/`total_depth` properties.
-- **Evaluation cooldown:** Markets that received a MiniMax evaluation (including low_edge SKIPs) are silently skipped for 2 hours (`EVALUATION_COOLDOWN_HOURS`). No DB record is written for these skips to avoid bloating the `trade_records` table. This prevents wasteful repeated LLM calls on the same market when few markets pass the resolution filter.
+- **Evaluation cooldown:** Markets that received a MiniMax full evaluation (including low_edge SKIPs) are silently skipped for 2 hours (`EVALUATION_COOLDOWN_HOURS`). No DB record is written for these skips. This cooldown is checked BEFORE the pre-screen gate — if a market is on cooldown, it's skipped instantly (no LLM, no Twitter). Pre-screen filtered markets do NOT trigger evaluation cooldown (they never reached full LLM), so they will be re-evaluated next scan.
 - **Early-exited trades have no actual_outcome:** They have PnL and `exit_type` set but `actual_outcome` is NULL. The learning system (calibration, Brier) correctly skips them. The `get_open_trades()` query filters `AND exit_type IS NULL` to avoid re-processing.
 - **VWAP returns price, not 1.0:** `compute_vwap()` returns `total_usd / total_shares` — the volume-weighted average *price* per share, not a USD ratio. VWAP is used in `kelly_size_vwap()` to cap position size at the depth where the trade remains profitable.
 - **RSS accumulator lock:** `poll_and_accumulate()` uses an `asyncio.Lock` to prevent race conditions with `consume_signals()`. The lock is per-instance, not global.
 - **WebSocket exit manager:** `RealTimeExitManager` in `src/engine/ws_exit.py` subscribes to YES tokens of open positions on the Polymarket market channel (`wss://ws-subscriptions-clob.polymarket.com/ws/market`). It calculates ROI from the best bid (sell price) and triggers instant TP/SL exits. The 5-min polling fallback in `check_early_exits()` catches anything missed during WS disconnects. Positions are tracked by `clob_token_id_yes` (stored in TradeRecord since migration v6).
 - **Pagination settings for mocked tests:** Tests that mock `Settings` with `spec=Settings` must set `MARKET_PAGE_SIZE`, `MARKET_FETCH_PAGES`, `MIN_TRADEABLE_PRICE`, and `MAX_TRADEABLE_PRICE` in addition to `MARKET_FETCH_LIMIT` for any test calling `get_active_markets()`.
 - **signal_tags format:** `signal_tags` passed to `adjust_prediction()` are now built from signal objects (not from the LLM's response). Format: `[{"source_tier": "SX", "info_type": "IX", "timestamp": "ISO8601|None"}]`. `info_type` is assigned by `classify_info_type(source_tier)` at creation. Timestamps from RSS/Twitter publication time enable temporal decay in Step 5.
-- **LLM response no longer includes signal_info_types:** `REQUIRED_FIELDS` in `grok_client.py` is `{"estimated_probability", "confidence", "reasoning"}`. MiniMax is not asked to classify signals — this is done deterministically. Tests that build LLM response dicts should NOT include `signal_info_types`.
+- **LLM response no longer includes signal_info_types:** `REQUIRED_FIELDS` in `grok_client.py` is `{"estimated_probability", "confidence", "reasoning"}`. MiniMax is not asked to classify signals — this is done deterministically via `classify_info_type(source_tier)` at signal creation. This change (v2.10) enables temporal decay: signal objects now carry real publication timestamps, replacing Grok-assigned types that had no timestamps (decay was dead code before). Tests that build LLM response dicts should NOT include `signal_info_types`.
 - **April 6, 2026 Polymarket exchange upgrade**: Polymarket rebuilt its order matching engine, migrated to native Polymarket USD stablecoin (from bridged USDC.e), and added smart contract wallet support (ERC-1271). Live trading now requires: (a) `POLYMARKET_PRIVATE_KEY` (wallet private key for signing, 0x-prefixed) and `POLYMARKET_FUNDER_ADDRESS` (for proxy/smart wallets; leave blank for EOA) set in `.env`; (b) `POLYMARKET_SECRET` and `POLYMARKET_PASSPHRASE` are now used as `ApiCreds` in the `ClobClient` Level-2 init (they were dead code before); (c) `py-clob-client` is pinned to `~=0.34.0` in `requirements.txt`; (d) `place_order()` now accepts `clob_token_id` (the ERC-1155 token ID from `Market.clob_token_id_yes`/`_no`) instead of `market_id`, and side is always `"BUY"` — direction is encoded by which token you target; (e) run `scripts/live_smoke_test.py` on VPS to validate before flipping `ENVIRONMENT=live`. Paper mode is unaffected.

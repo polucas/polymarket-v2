@@ -442,10 +442,10 @@ class TestPlaceOrder:
 
 class TestPagination:
     def test_default_pagination_settings(self):
-        """Pagination defaults: page_size=500, pages=3."""
+        """Pagination defaults: page_size=500, pages=2."""
         settings = _make_settings()
         assert settings.MARKET_PAGE_SIZE == 500
-        assert settings.MARKET_FETCH_PAGES == 3
+        assert settings.MARKET_FETCH_PAGES == 2
         # Backward compat
         assert settings.MARKET_FETCH_LIMIT == 200
 

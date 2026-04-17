@@ -1,10 +1,11 @@
 # Polymarket Prediction System v2.10 — Complete Project Bible
 
-> **Version:** 2.10 | **Last updated:** 2026-03-29
+> **Version:** 2.10 | **Last updated:** 2026-04-17
 > **Status:** Paper trading (restarted after 2-week pause)
 > **Bankroll:** $10,000 | **Monthly OpEx target:** <$35
 >
 > **v2.10 changes:**
+> - **`MARKET_FETCH_PAGES` default reduced 3 → 2:** Code default now matches deployed `.env`. With the pre-screen gate filtering ~30% of markets, fetching fewer pages cuts Gamma API pagination cost and keeps high-volume markets (list is volume-sorted). Effective cap drops from 1,500 → 1,000 markets/scan.
 > - **Orderbook re-fetch after Grok:** Orderbook re-fetched in `_process_market()` immediately after `call_grok_with_retry()` returns. Prevents adverse selection from latency bots sweeping the book during the ~2–4s Grok window. If the book moved against the prediction, edge is negative → trade skipped naturally.
 > - **Deterministic signal classification:** `info_type` (I1-I5) is now assigned at signal creation via `classify_info_type(source_tier)` in `signal_classifier.py`. S1→I1, S2/S3→I2, S4→I3, S5→I4, S6→I5. Replaces Grok-based classification (which had no timestamps, making temporal decay dead code, and introduced subjective variance). `signal_info_types` removed from Grok prompt and `REQUIRED_FIELDS`. Signal tags now include real publication timestamps.
 > - **Market-type specific temporal decay:** `_DECAY_PARAMS` dict in `adjustment.py` replaces uniform 0.05/hr decay. Crypto signals decay at 0.05/min (floor 0.40, grace 1 min); political/regulatory decay at 0.01-0.02/hr (floor 0.80-0.85, grace 1-2h). Decay now actually fires (previously dead code — Grok signal_tags had no timestamps).
@@ -639,6 +640,23 @@ def should_activate_tier2(news_signals: List[Signal]) -> bool:
     return has_authoritative
 ```
 
+### 5.5 Pre-Screen Gate (Cost Optimization — added v2.10)
+
+Before calling the expensive Twitter API ($0.0075/market), a cheap LLM pre-screen runs on RSS signals + orderbook only. This cuts Twitter spend by ~60-70% and full LLM spend by ~70%.
+
+| Parameter | Config key | Default | Notes |
+|-----------|-----------|---------|-------|
+| Enabled | `PRESCREEN_ENABLED` | `true` | Disable only for debugging |
+| Min raw edge | `PRESCREEN_MIN_EDGE` | `0.05` | \|pre_prob - market_price\| threshold — intentionally loose |
+| Min confidence | `PRESCREEN_MIN_CONFIDENCE` | `0.25` | Much lower than full eval (0.65+) — loose gate |
+| Max tokens | `PRESCREEN_MAX_TOKENS` | `300` | Keeps latency ~1s and cost ~$0.0001/call |
+
+**Thresholds are intentionally loose.** False negatives (filtering a real edge) are acceptable at low cost. False positives (letting through noise) cost ~$0.0075 Twitter + $0.0004 LLM — the penalty is small. Start loose, tighten based on `SELECT skip_reason, COUNT(*) FROM trade_records WHERE skip_reason LIKE 'prescreen_%'` data.
+
+**Fail-open:** If the pre-screen LLM call fails (parse error, timeout, network), returns `None` → market falls through to full evaluation. Pre-screen never blocks a trade on infrastructure failure.
+
+**Skip reason format:** `prescreen_filtered_edge=0.023_conf=0.18` — enables monitoring filter rate and threshold calibration.
+
 ---
 
 ## 6. Signal Classification (Two-Dimensional)
@@ -700,7 +718,7 @@ The two-tag system enables granular learning:
 | Fed announces rate hold | S1 | I1 | S1 × I1 on political = near-certain signal |
 | Reuters: "Sources say deal stalling" | S2 | I3 | S2 × I3 on political = moderate signal |
 | @elonmusk tweets about crypto | S4 | I4 | S4 × I4 on crypto = track if it moves markets |
-| $200K whale buy on Polymarket | S5 | I6 | S5 × I6 on political = whale conviction signal |
+| $200K whale buy on Polymarket | S5 | I4 | S5 × I4 on political = whale conviction signal |
 | Random account: "BREAKING: Trump to sign EO" | S6 | I2 | S6 × I2 = strong claim, weak source — track accuracy |
 
 With 6 × 6 × ~5 market types = 180 cells. Most will be sparse. System requires 5 samples per cell before activating lift calculations — empty cells don't influence decisions.
@@ -828,7 +846,10 @@ class TradeRecord:
     grok_raw_probability: float
     grok_raw_confidence: float
     grok_reasoning: str
-    grok_signal_types: List[dict]     # [{"source_tier": "S2", "info_type": "I2", "content": "..."}]
+    # grok_signal_types: field name is historical — info_type is now assigned deterministically
+    # by classify_info_type(source_tier) at signal creation (see Section 6.4). Not populated by Grok.
+    grok_signal_types: List[dict]     # [{"source_tier": "S2", "info_type": "I2", "timestamp": "2026-04-17T12:34:56Z"}]
+    headline_only_signal: bool        # True if signal came from headline without body content
     
     calibration_adjustment: float
     market_type_adjustment: float
@@ -840,11 +861,15 @@ class TradeRecord:
     orderbook_depth_usd: float
     fee_rate: float
     calculated_edge: float
+    trade_score: Optional[float]      # Ranking score (edge × confidence × time_value)
+    spread_at_decision: Optional[float]  # Spread at decision time
+    vwap_price: Optional[float]       # Volume-weighted average price of position
     
     action: str                       # "BUY_YES", "BUY_NO", "SKIP"
-    skip_reason: Optional[str]        # "edge_below_threshold", "daily_cap", "observe_only", etc.
+    skip_reason: Optional[str]        # "edge_below_threshold", "daily_cap_reached", "prescreen_filtered_edge=X_conf=Y", etc.
     position_size_usd: float
     kelly_fraction_used: float
+    market_cluster_id: Optional[str]  # Correlated market group (Section 10.2)
     
     actual_outcome: Optional[bool]
     pnl: Optional[float]
@@ -852,6 +877,11 @@ class TradeRecord:
     brier_score_adjusted: Optional[float]   # Measures full system accuracy (go-live criterion)
     resolved_at: Optional[datetime]
     unrealized_adverse_move: Optional[float] # For cooldown on unresolved trades
+    exit_type: Optional[str]          # "TAKE_PROFIT" | "STOP_LOSS" | None (held to resolution)
+    exit_price: Optional[float]       # Price at early exit (None if held)
+    
+    clob_token_id_yes: str = ""       # ERC-1155 token ID for YES outcome (migration v6)
+    clob_token_id_no: str = ""        # ERC-1155 token ID for NO outcome (migration v6)
     
     voided: bool = False
     void_reason: Optional[str] = None
@@ -1608,6 +1638,26 @@ Paper mode simulation: fill probability = `0.4 + 0.4 * (1 - abs(price - 0.5))` (
 
 ## 11. Data Pipeline
 
+### 11.0 Two-Stage Evaluation Flow (added v2.10)
+
+Each Tier 1 market goes through two stages before a full LLM evaluation:
+
+```
+cooldown check (silent skip, no DB)
+    ↓ pass
+keyword extraction
+    ↓
+[STAGE 1 — PRE-SCREEN]
+RSS signals (top 3) + orderbook → cheap LLM (max_tokens=300, 1 retry)
+    ↓ confidence < 0.25 OR edge < 0.05
+    → save SKIP record (prescreen_filtered_...) → STOP
+    ↓ pass (or pre-screen returned None → fail-open)
+[STAGE 2 — FULL EVALUATION]
+Twitter API ($0.0075) → full LLM ($0.0004, 3 attempts) → orderbook re-fetch → edge calc → trade/skip
+```
+
+Pre-screen uses `build_prescreen_context()` (smaller prompt: 3 RSS signals, one-sentence reasoning). Full eval uses `build_grok_context()` (up to 7 merged signals, adversarial reasoning). Both use the same `SYSTEM_PROMPT` and `REQUIRED_FIELDS`.
+
 ### 11.1 Market-to-Signal Keyword Extraction
 
 Before pulling signals for a market, the system must extract search keywords from the market question. This is the core matching problem — bad keywords produce irrelevant signals.
@@ -1753,7 +1803,7 @@ class RSSPipeline:
         self.seen_headlines: Dict[str, datetime] = {}
     
     def _prune_old_headlines(self):
-        cutoff = datetime.utcnow() - timedelta(hours=24)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         self.seen_headlines = {
             h: ts for h, ts in self.seen_headlines.items() if ts > cutoff
         }
@@ -1768,10 +1818,10 @@ class RSSPipeline:
                     headline = entry.title.strip()
                     if headline in self.seen_headlines:
                         continue
-                    self.seen_headlines[headline] = datetime.utcnow()
+                    self.seen_headlines[headline] = datetime.now(timezone.utc)
                     
                     published = parse_date(entry.get("published", ""))
-                    if published and (datetime.utcnow() - published).total_seconds() > 7200:
+                    if published and (datetime.now(timezone.utc) - published).total_seconds() > 7200:
                         continue
                     
                     source_tier = classify_source_tier({"source_type": "rss", "domain": cfg["domain"]})
@@ -1784,42 +1834,79 @@ class RSSPipeline:
             except Exception:
                 continue
         return signals
+    
+    async def poll_and_accumulate(self) -> None:
+        """Called every 30s by the RSS scheduler job. Fetches new signals and
+        appends to internal buffer (thread-safe via asyncio.Lock)."""
+        async with self._lock:
+            new_signals = await self.get_breaking_news()
+            self._accumulated.extend(new_signals)
+    
+    def consume_signals(self) -> List[Signal]:
+        """Called once per Tier 1 scan cycle (every 15min). Returns all
+        accumulated signals and clears the buffer."""
+        async with self._lock:
+            signals = list(self._accumulated)
+            self._accumulated.clear()
+            return signals
 ```
+
+**RSS pipeline flow:** `poll_and_accumulate()` is called on the 30s scheduler job and fills an internal buffer. `consume_signals()` is called by the Tier 1 scan to drain and use those signals — this allows RSS to decouple from the 15min scan cycle. Tier 2 calls `get_breaking_news()` directly (no buffer). The pre-screen gate (see 11.0) uses top 3 RSS signals from the accumulated buffer; the full LLM context uses all merged Twitter + RSS signals.
 
 ### 11.4 Context Compression (Grok Prompt)
 
 ```python
+def _format_signal_age(s: Signal) -> str:
+    if not s.timestamp:
+        return "age unknown"
+    age_min = (datetime.now(timezone.utc) - s.timestamp).total_seconds() / 60
+    return f"{int(age_min)}min ago" if age_min < 120 else f"{age_min/60:.1f}h ago"
+
 def build_grok_context(market: Market, twitter_signals: List[Signal],
-                       rss_signals: List[Signal], orderbook: OrderBook) -> str:
+                       rss_signals: List[Signal], orderbook: OrderBook,
+                       market_type: str = "unknown") -> str:
     all_signals = sorted(twitter_signals + rss_signals, key=lambda s: s.credibility, reverse=True)[:7]
-    
-    signal_text = "\n".join([
-        f"- [{s.source_tier}|{s.source}] ({s.credibility:.0%}) @{s.author}: {s.content}"
-        for s in all_signals
-    ]) or "No signals available."
+
+    signal_lines = []
+    for i, s in enumerate(all_signals, 1):
+        source_label = f"[{s.source_tier}|{s.source}]"
+        age_str = _format_signal_age(s)
+        headline_tag = " [HEADLINE-ONLY]" if s.headline_only else ""
+        signal_lines.append(
+            f"  {i}. {source_label} {age_str} (cred={s.credibility:.2f}): {s.content[:200]}{headline_tag}"
+        )
+    signals_text = "\n".join(signal_lines) if signal_lines else "  No signals available."
 
     bid_depth = sum(level.size for level in orderbook.bids)
     ask_depth = sum(level.size for level in orderbook.asks)
     ob_depth = bid_depth + ask_depth
     ob_skew = (bid_depth - ask_depth) / ob_depth if ob_depth > 0 else 0.0
+    spread = orderbook.spread
+    spread_line = f"\nSpread: {spread:.4f}" if spread is not None else ""
 
-    return f"""MARKET: {market.question}
-CURRENT PRICE: YES={market.yes_price:.4f} NO={market.no_price:.4f}
-RESOLUTION: {market.hours_to_resolution:.1f}h from now
-VOLUME 24H: ${market.volume_24h:,.0f} | LIQUIDITY: ${market.liquidity:,.0f}
-ORDER BOOK: depth=${ob_depth:,.0f} skew={ob_skew:+.2f} (positive=buy pressure)
+    market_type_label = market_type.replace("_", " ").title()
 
-SIGNALS (ranked by credibility):
-{signal_text}
+    return f"""MARKET ANALYSIS — {market_type_label}
+
+Question: {market.question}
+Current YES price: {market.yes_price:.4f} (market consensus)
+Current NO price: {market.no_price:.4f}
+Resolution: {market.hours_to_resolution:.1f} hours
+Orderbook depth: ${ob_depth:,.0f} (skew: {ob_skew:+.2f}){spread_line}
+
+SIGNALS:
+{signals_text}
 
 INSTRUCTIONS:
-1. Analyze the signals and market context
-2. Estimate the probability of YES outcome
-3. Rate your confidence in the estimate
+1. Consider why the market price ({market.yes_price:.4f}) might already be correct
+2. Identify specific evidence from signals that suggests mispricing
+3. If signals are stale, weak, or ambiguous, stay close to market price
+4. Estimate true probability and your confidence
 
-Respond with ONLY this JSON (no markdown, no extra text):
-{{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "..."}}"""
+Return ONLY: {{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "Why market is wrong: [evidence]. Counter: [why market might be right]."}}"""
 ```
+
+**Key changes vs earlier versions:** Volume/liquidity removed (irrelevant to probability). Signal age shown explicitly so LLM can discount stale signals. `[HEADLINE-ONLY]` tag flags signals with no article body. Market type in header provides domain context. Instructions require adversarial reasoning ("why market might be right") to prevent overconfident false-edge trades. Reasoning format is structured (evidence + counter).
 
 ### 11.5 Grok Response Parsing & Error Handling
 
@@ -1842,7 +1929,7 @@ async def call_grok_with_retry(context: str, market_id: str) -> Optional[dict]:
     """
     for attempt in range(MAX_RETRIES + 1):
         try:
-            raw_response = await grok_client.complete(context, max_tokens=500)
+            raw_response = await grok_client.complete(context)  # max_tokens=2000 default
             parsed = parse_json_safe(raw_response)
             
             if not parsed:
@@ -2015,7 +2102,7 @@ CREATE TABLE trade_records (
     grok_raw_probability REAL NOT NULL,
     grok_raw_confidence REAL NOT NULL,
     grok_reasoning TEXT,
-    grok_signal_types TEXT,       -- JSON: [{source_tier, info_type, content}]
+    grok_signal_types TEXT,       -- JSON: [{source_tier, info_type, timestamp}]. Field name is historical — not populated by Grok. info_type assigned deterministically by classify_info_type(source_tier) (Section 6.4); timestamp from publication time.
     headline_only_signal BOOLEAN DEFAULT FALSE,
     
     calibration_adjustment REAL DEFAULT 0,
@@ -2031,7 +2118,7 @@ CREATE TABLE trade_records (
     trade_score REAL,             -- Ranking score (edge × confidence × time_value)
     
     action TEXT NOT NULL,         -- BUY_YES, BUY_NO, SKIP
-    skip_reason TEXT,             -- edge_below_threshold, daily_cap, ranked_below_cutoff, cluster_exposure_limit, observe_only
+    skip_reason TEXT,             -- edge_below_threshold, daily_cap_reached, cluster_exposure_limit, observe_only, prescreen_filtered_edge=X_conf=Y
     position_size_usd REAL DEFAULT 0,
     kelly_fraction_used REAL DEFAULT 0,
     market_cluster_id TEXT,       -- Correlated market group (Section 10.2)
@@ -2044,7 +2131,17 @@ CREATE TABLE trade_records (
     unrealized_adverse_move REAL, -- For cooldown on unresolved trades (Section 9.2)
     
     voided BOOLEAN DEFAULT FALSE,
-    void_reason TEXT
+    void_reason TEXT,
+    
+    -- Added migration v5
+    spread_at_decision REAL,      -- Spread at decision time
+    vwap_price REAL,              -- Volume-weighted average price of position
+    exit_type TEXT,               -- 'TAKE_PROFIT' | 'STOP_LOSS' | NULL (held to resolution)
+    exit_price REAL,              -- Price at early exit (NULL if held)
+    
+    -- Added migration v6
+    clob_token_id_yes TEXT DEFAULT '',  -- ERC-1155 token ID for YES outcome
+    clob_token_id_no TEXT DEFAULT ''    -- ERC-1155 token ID for NO outcome
 );
 
 CREATE INDEX idx_trades_market_type ON trade_records(market_type);
@@ -2153,15 +2250,18 @@ ALTER TABLE trade_records ADD COLUMN exit_price REAL;       -- price at which po
 
 | Component | Daily calls | Cost/call | Daily | Monthly |
 |-----------|-------------|-----------|-------|---------|
-| Grok (Tier 1) | ~480 | ~$0.0004 | $0.19 | $5.70 |
-| Grok (Tier 2) | ~75 per activation × ~0.43/day avg | ~$0.0004 | $0.013 | $3.60 |
+| Grok pre-screen (Tier 1) | ~100 (2 pages × 50 passing cooldown) | ~$0.0001 | $0.01 | $0.30 |
+| Grok full eval (Tier 1) | ~30 (70% filtered by pre-screen) | ~$0.0004 | $0.012 | $0.36 |
+| Grok (Tier 2) | ~75 per activation × ~0.43/day avg | ~$0.0004 | $0.013 | $0.39 |
 | Grok (keyword extraction) | ~20 (cache miss) | ~$0.0002 | $0.004 | $0.12 |
-| TwitterAPI.io (Tier 1) | ~48 searches | ~$0.0075 | $0.36 | $10.80 |
+| TwitterAPI.io (Tier 1) | ~30 searches (pre-screen filters ~70%) | ~$0.0075 | $0.225 | $6.75 |
 | TwitterAPI.io (Tier 2) | ~15 per activation × ~0.43/day avg | ~$0.0075 | $0.048 | $1.44 |
 | RSS feeds | ~288 | Free | $0.00 | $0.00 |
 | Polymarket API | ~500 | Free | $0.00 | $0.00 |
 | **Hetzner VPS (CX22)** | — | — | — | **$4.70** |
-| **TOTAL** | | | | **$26.36** |
+| **TOTAL** | | | | **~$14.06** |
+
+*Pre-screen gate (added v2.10): cheap LLM check (max_tokens=300) before expensive Twitter fetch. Filters markets where RSS-only evidence shows confidence <0.25 or edge <5%. Saves ~60% of Twitter cost vs original design. See Section 11.0.*
 
 *Tier 2 estimate: each activation runs 30 min at 2-3 min intervals = ~10-15 scans × ~5 crypto markets = ~75 Grok calls. Tier 2 activates ~3x/week on average = 0.43/day. If activation frequency is higher in volatile periods, monthly Tier 2 costs could reach $6-8.*
 
@@ -2430,11 +2530,10 @@ Telegram bot for real-time notifications. Implemented in `src/alerts.py` with 9 
 | Error | Any scan/resolve/adverse-update failure | `format_error_alert()` |
 | Observe-only | Daily trade cap hit (once per day) | `format_observe_only_alert()` |
 | Monk Mode | Any Monk Mode constraint triggered | `format_monk_mode_alert()` |
-| Tier 2 activated | Crypto news triggers Tier 2 scan | `format_tier2_alert(active=True)` |
-| Tier 2 deactivated | No crypto signals for 30 min | `format_tier2_alert(active=False)` |
-| Bot started | Application startup | `format_lifecycle_alert("STARTED", env)` |
-| Bot stopping | Application shutdown | `format_lifecycle_alert("STOPPING", env)` |
+| Tier 2 state change | Crypto news activates Tier 2 / no signals for 30 min deactivates | `format_tier2_alert(active=True/False)` |
+| Bot lifecycle | Application startup / shutdown | `format_lifecycle_alert("STARTED"/"STOPPING", env)` |
 | Stale scan warning | No scan completed in >30 min | `format_stale_scan_alert()` |
+| Early exit | WS or polling fallback triggers TP (+20% ROI) or SL (-15% ROI) | `format_early_exit_alert()` |
 
 **Configuration:** `DAILY_SUMMARY_HOUR_UTC` (default: 0) controls when the daily summary is sent. Set in `.env` or config.
 
