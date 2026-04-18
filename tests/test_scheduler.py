@@ -75,6 +75,7 @@ def _build_scheduler() -> Scheduler:
     settings.STOP_LOSS_ROI = -0.15
     settings.EARLY_EXIT_ENABLED = True
     settings.PRESCREEN_ENABLED = False
+    settings.WEAK_SIGNAL_STRENGTH_THRESHOLD = 0.45
 
     db = AsyncMock()
     polymarket = AsyncMock()
@@ -519,3 +520,91 @@ class TestNoSignalsShortCircuit:
         # orderbook AND grok must have been called (short-circuit was NOT hit)
         scheduler._polymarket.get_orderbook.assert_called()
         scheduler._grok.call_grok_with_retry.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Weak-signal gate in _process_market
+# ---------------------------------------------------------------------------
+
+
+class TestWeakSignalGate:
+    """When all signals have low credibility (avg < WEAK_SIGNAL_STRENGTH_THRESHOLD),
+    _process_market must save a weak_signals_* SKIP and return without touching
+    the orderbook or calling the LLM prescreen."""
+
+    @pytest.mark.asyncio
+    async def test_weak_signals_skip_without_prescreen_or_orderbook(self):
+        """2 signals with credibility=0.3 each → avg=0.3 < 0.45 → gate fires."""
+        scheduler = _build_scheduler()
+        # Enable the weak-signal threshold
+        scheduler._settings.WEAK_SIGNAL_STRENGTH_THRESHOLD = 0.45
+        # Prescreen is disabled in _build_scheduler; keep it off so no prescreen call
+        scheduler._settings.PRESCREEN_ENABLED = False
+
+        market = _make_market()
+        scheduler._market_type_mgr.should_disable.return_value = False
+
+        weak_signal_1 = _make_signal(content="will x happen politics", credibility=0.3)
+        weak_signal_2 = _make_signal(content="x politics update", credibility=0.3)
+        # twitter returns two weak signals
+        scheduler._twitter.get_signals_for_market.return_value = [weak_signal_1, weak_signal_2]
+
+        with patch("src.scheduler.extract_keywords", return_value=["x", "happen"]):
+            await scheduler._process_market(
+                market=market,
+                rss_signals=[],
+                scan_mode="normal",
+                candidates=[],
+                all_skips=[],
+                today_trades=[],
+                experiment_run="exp-001",
+                tier=1,
+            )
+
+        # save_trade must be called once with a weak_signals_* reason
+        scheduler._db.save_trade.assert_called_once()
+        saved_record = scheduler._db.save_trade.call_args[0][0]
+        assert saved_record.skip_reason.startswith("weak_signals_")
+
+        # LLM prescreen and orderbook must NOT have been called
+        scheduler._grok.call_prescreen.assert_not_called()
+        scheduler._polymarket.get_orderbook.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_strong_signals_pass_gate(self):
+        """Signals averaging credibility=0.7 must bypass the weak-signal gate."""
+        scheduler = _build_scheduler()
+        scheduler._settings.WEAK_SIGNAL_STRENGTH_THRESHOLD = 0.45
+        scheduler._settings.PRESCREEN_ENABLED = False
+
+        market = _make_market()
+        scheduler._market_type_mgr.should_disable.return_value = False
+
+        strong_signal = _make_signal(content="will x happen politics", credibility=0.7)
+        scheduler._twitter.get_signals_for_market.return_value = [strong_signal]
+
+        # LLM returns None → grok_failed skip (we just need it past the gate)
+        scheduler._grok.call_grok_with_retry.return_value = None
+        scheduler._polymarket.get_orderbook.return_value = MagicMock()
+
+        with patch("src.scheduler.extract_keywords", return_value=["x", "happen"]):
+            await scheduler._process_market(
+                market=market,
+                rss_signals=[],
+                scan_mode="normal",
+                candidates=[],
+                all_skips=[],
+                today_trades=[],
+                experiment_run="exp-001",
+                tier=1,
+            )
+
+        # save_trade may be called (for grok_failed), but NOT for weak_signals_*
+        for call in scheduler._db.save_trade.call_args_list:
+            record = call[0][0]
+            assert not record.skip_reason.startswith("weak_signals_"), (
+                f"Unexpected weak_signals skip: {record.skip_reason}"
+            )
+
+        # orderbook was fetched (gate did not fire)
+        scheduler._polymarket.get_orderbook.assert_called()

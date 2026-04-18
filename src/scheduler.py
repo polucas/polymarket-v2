@@ -471,7 +471,7 @@ class Scheduler:
                     continue
                 if recent_mtype != market.market_type:
                     continue
-                recent_kw = [w.lower() for w in recent_question.split() if len(w) > 3]
+                recent_kw = extract_keywords(recent_mid, recent_question, recent_mtype)
                 if keyword_overlap(market.keywords, recent_kw) >= self._settings.QUESTION_SIMILARITY_THRESHOLD:
                     log.info("similar_market_blocked", market_id=market.market_id, similar_to=recent_mid)
                     skip_record = self._build_skip_record(
@@ -537,6 +537,18 @@ class Scheduler:
             skip_record = self._build_skip_record(market, "no_signals", experiment_run, tier)
             await self._db.save_trade(skip_record)
             return
+
+        # Weak-signal gate: if average credibility is below threshold, the LLM will
+        # anchor to market price (no_direction). Skip now to save Twitter + LLM cost.
+        all_signals = list(twitter_signals) + list(relevant_rss)
+        if all_signals:
+            strength = sum(s.credibility for s in all_signals) / len(all_signals)
+            if strength < self._settings.WEAK_SIGNAL_STRENGTH_THRESHOLD:
+                skip_record = self._build_skip_record(
+                    market, f"weak_signals_{strength:.2f}", experiment_run, tier
+                )
+                await self._db.save_trade(skip_record)
+                return
 
         # Get orderbook
         orderbook = await self._polymarket.get_orderbook(market.clob_token_id_yes, market.market_id)

@@ -56,6 +56,7 @@ def _build_scheduler() -> Scheduler:
     settings.MIN_TRADEABLE_PRICE = 0.05
     settings.MAX_TRADEABLE_PRICE = 0.95
     settings.PRESCREEN_ENABLED = False
+    settings.WEAK_SIGNAL_STRENGTH_THRESHOLD = 0.0
 
     db = AsyncMock()
     polymarket = AsyncMock()

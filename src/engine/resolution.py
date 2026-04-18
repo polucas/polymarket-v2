@@ -248,6 +248,17 @@ async def update_unrealized_adverse_moves(db: Database, polymarket_client) -> No
                 continue
 
             if adverse_move > 0.10:
+                old_adverse = trade.unrealized_adverse_move or 0.0
+                if old_adverse <= 0.10:
+                    log.info(
+                        "unrealized_adverse_triggered",
+                        market_id=trade.market_id,
+                        market_type=trade.market_type,
+                        entry_price=entry_price,
+                        current_price=current_price,
+                        adverse_pct=round(adverse_move, 4),
+                        threshold=0.10,
+                    )
                 trade.unrealized_adverse_move = adverse_move
                 await db.update_trade(trade)
                 log.warning("adverse_move_detected",

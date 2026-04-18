@@ -14,6 +14,7 @@ from src.db.sqlite import Database
 from src.engine.trade_ranker import keyword_overlap
 from src.models import ExperimentRun, Market, Signal, TradeRecord
 from src.config import Settings, MonkModeConfig
+from src.pipelines.context_builder import extract_keywords, _keyword_cache
 from src.scheduler import Scheduler
 
 
@@ -131,6 +132,7 @@ def _build_scheduler() -> Scheduler:
     settings.MIN_TRADEABLE_PRICE = 0.05
     settings.MAX_TRADEABLE_PRICE = 0.95
     settings.PRESCREEN_ENABLED = False
+    settings.WEAK_SIGNAL_STRENGTH_THRESHOLD = 0.0
 
     db = AsyncMock()
     polymarket = AsyncMock()
@@ -334,31 +336,27 @@ class TestSimilarQuestionBlocked:
     async def test_similar_question_blocked(self):
         scheduler = _build_scheduler()
 
-        # Market to evaluate: "Will Trump win the election?" with matching keywords
+        # Market to evaluate: "Will Donald Trump win the 2028 election?" with matching keywords.
+        # market.keywords is set explicitly to mirror what extract_keywords would return.
+        # Both sides now use extract_keywords, so we need the candidate-side keywords and
+        # the recent-side extract_keywords result to produce Jaccard >= 0.60.
+        #
+        # extract_keywords("market-prev", "Donald Trump wins 2028 presidential race", "political")
+        #   → named entity: "Donald Trump"; supplements (< 2 entities): ["election","vote","polls"]
+        #   → ["Donald Trump", "election", "vote", "polls"]
+        # candidate keywords: ["Donald Trump", "election", "vote", "polls"]
+        # intersection = all 4 → Jaccard = 1.0 >= 0.60 ✓
         market = _make_market(
             market_id="market-new",
-            question="Will Trump win the election?",
+            question="Will Donald Trump win the 2028 election?",
             market_type="political",
-            keywords=["trump", "election", "vote"],
+            keywords=["Donald Trump", "election", "vote", "polls"],
         )
         candidates = []
         all_skips = []
 
-        # Recent question with same type and high keyword overlap
-        # Splitting "Will Trump win the election?" → words > 3 chars: ["will", "trump", "election"]
-        # Actually: "Will"(4), "Trump"(5), "win"(3-skip), "the"(3-skip), "election"(8) → ["Will", "Trump", "election"]
-        # After lower: ["will", "trump", "election"]
-        # market.keywords: ["trump", "election", "vote"]
-        # set_a = {"trump","election","vote"}, set_b = {"will","trump","election"}
-        # intersection = {"trump","election"} = 2, union = {"trump","election","vote","will"} = 4
-        # Jaccard = 2/4 = 0.50, which is >= 0.60? No — need higher overlap.
-        # Use a question that gives higher overlap:
-        # "Trump election vote outcome" → words > 3: ["Trump","election","vote","outcome"]
-        # lower: {"trump","election","vote","outcome"}
-        # intersection with {"trump","election","vote"} = {"trump","election","vote"} = 3
-        # union = {"trump","election","vote","outcome"} = 4 → Jaccard = 3/4 = 0.75 >= 0.60 ✓
         recent_questions = [
-            ("market-prev", "Trump election vote outcome", "political"),
+            ("market-prev", "Donald Trump wins 2028 presidential race", "political"),
         ]
 
         scheduler._db.save_trade = AsyncMock()
@@ -547,7 +545,54 @@ class TestKeywordOverlapFunction:
 
 
 # ---------------------------------------------------------------------------
-# 9. get_recent_market_questions DB query
+# 9. Unified extract_keywords on both Jaccard sides
+# ---------------------------------------------------------------------------
+
+class TestUnifiedKeywordExtraction:
+    """Both sides of the Jaccard comparison must now use extract_keywords.
+    These tests guard against the regression where the recent-question side
+    used a raw split() instead of extract_keywords, causing false positives.
+    """
+
+    def setup_method(self):
+        # Clear keyword cache between tests to ensure fresh extraction
+        _keyword_cache.clear()
+
+    def test_same_semantic_meaning_blocks(self):
+        """Same entity, different surface wording → unified extractor → Jaccard >=0.60 → blocks."""
+        # Both "Will Donald Trump win the 2028 election?" and
+        # "Donald Trump wins 2028 presidential race" extract "Donald Trump" + political supplements.
+        candidate_kw = extract_keywords(
+            "m-candidate", "Will Donald Trump win the 2028 election?", "political"
+        )
+        recent_kw = extract_keywords(
+            "m-recent", "Donald Trump wins 2028 presidential race", "political"
+        )
+        overlap = keyword_overlap(candidate_kw, recent_kw)
+        assert overlap >= 0.60, (
+            f"Same-entity questions should have Jaccard >=0.60, got {overlap:.2f}. "
+            f"candidate={candidate_kw}, recent={recent_kw}"
+        )
+
+    def test_distinct_events_do_not_block(self):
+        """Distinct markets on unrelated events → unified extractor → Jaccard <0.60 → does not block."""
+        # "Will the Fed raise interest rates in June 2026?" (economic) vs
+        # "Will Bitcoin reach $90000 in June 2026?" (crypto_15m) — completely different entities.
+        candidate_kw = extract_keywords(
+            "m-fed", "Will the Fed raise interest rates in June 2026?", "economic"
+        )
+        recent_kw = extract_keywords(
+            "m-btc", "Will Bitcoin reach $90000 in June 2026?", "crypto_15m"
+        )
+        overlap = keyword_overlap(candidate_kw, recent_kw)
+        assert overlap < 0.60, (
+            f"Unrelated markets should have Jaccard <0.60, got {overlap:.2f}. "
+            f"candidate={candidate_kw}, recent={recent_kw}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 10. get_recent_market_questions DB query
 # ---------------------------------------------------------------------------
 
 class TestGetRecentMarketQuestions:

@@ -39,6 +39,15 @@ class TestSettings:
         s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
         assert s.MARKET_FETCH_LIMIT == 200
 
+    def test_weak_signal_strength_threshold_default(self):
+        s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
+        assert s.WEAK_SIGNAL_STRENGTH_THRESHOLD == 0.45
+
+    def test_weak_signal_strength_threshold_env_override(self, monkeypatch):
+        monkeypatch.setenv("WEAK_SIGNAL_STRENGTH_THRESHOLD", "0.35")
+        s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
+        assert s.WEAK_SIGNAL_STRENGTH_THRESHOLD == 0.35
+
 
 class TestMonkModeConfig:
     def test_from_settings(self):

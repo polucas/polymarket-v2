@@ -76,7 +76,8 @@ class Settings(BaseSettings):
     PRESCREEN_ENABLED: bool = True
     PRESCREEN_MIN_EDGE: float = 0.05        # raw |prob - price| gate (intentionally loose)
     PRESCREEN_MIN_CONFIDENCE: float = 0.35   # LLM confidence gate
-    PRESCREEN_MAX_TOKENS: int = 300          # small response budget
+    PRESCREEN_MAX_TOKENS: int = 500          # small response budget
+    WEAK_SIGNAL_STRENGTH_THRESHOLD: float = 0.45  # avg credibility below this → skip before orderbook + LLM
 
     # Alerts
     DAILY_SUMMARY_HOUR_UTC: int = 0  # Hour of day (UTC) to send daily summary

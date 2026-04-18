@@ -1,12 +1,15 @@
 """Tests for src.engine.resolution – calculate_pnl, calculate_hypothetical_pnl,
 auto_resolve_trades, and update_unrealized_adverse_moves."""
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import structlog
+from structlog.testing import capture_logs
 
 from src.engine.resolution import (
     calculate_pnl,
@@ -354,3 +357,91 @@ class TestUpdateUnrealizedAdverseMoves:
         # 0.12 > 0.10 threshold -> should update
         assert abs(trade.unrealized_adverse_move - 0.12) < 1e-9
         mock_db.update_trade.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests 28-30: unrealized_adverse_triggered log on threshold crossing
+# ---------------------------------------------------------------------------
+
+
+class TestUnrealizedAdverseTriggeredLog:
+    """Tests 28-30: structured log emitted only on fresh threshold crossing."""
+
+    @pytest.mark.asyncio
+    async def test_fresh_crossing_emits_log(self):
+        """Test 28: prior adverse 0.05 (below threshold), current 15% adverse
+        -> log 'unrealized_adverse_triggered' emitted once with correct fields."""
+        trade = _make_record(
+            action="BUY_YES",
+            market_price_at_decision=0.50,
+            actual_outcome=None,
+        )
+        trade.unrealized_adverse_move = 0.05  # below threshold
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+
+        # current_price=0.35 -> adverse_move = max(0, 0.50-0.35) = 0.15 > 0.10
+        mock_market = SimpleNamespace(yes_price=0.35)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        with capture_logs() as log_output:
+            await update_unrealized_adverse_moves(mock_db, mock_client)
+
+        triggered = [e for e in log_output if e.get("event") == "unrealized_adverse_triggered"]
+        assert len(triggered) == 1
+        rec = triggered[0]
+        assert abs(rec["adverse_pct"] - 0.15) < 1e-4
+        assert rec["threshold"] == 0.10
+        assert rec["market_id"] == trade.market_id
+
+    @pytest.mark.asyncio
+    async def test_small_adverse_no_log(self):
+        """Test 29: 2% adverse move (below 10% threshold) -> no log emitted."""
+        trade = _make_record(
+            action="BUY_YES",
+            market_price_at_decision=0.50,
+            actual_outcome=None,
+        )
+        trade.unrealized_adverse_move = 0.0
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+
+        # current_price=0.48 -> adverse_move = max(0, 0.50-0.48) = 0.02 < 0.10
+        mock_market = SimpleNamespace(yes_price=0.48)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        with capture_logs() as log_output:
+            await update_unrealized_adverse_moves(mock_db, mock_client)
+
+        triggered = [e for e in log_output if e.get("event") == "unrealized_adverse_triggered"]
+        assert len(triggered) == 0
+
+    @pytest.mark.asyncio
+    async def test_already_above_threshold_no_new_log(self):
+        """Test 30: prior adverse 0.15 (already above threshold), current 20% adverse
+        -> no new log emitted (not a fresh crossing)."""
+        trade = _make_record(
+            action="BUY_YES",
+            market_price_at_decision=0.50,
+            actual_outcome=None,
+        )
+        trade.unrealized_adverse_move = 0.15  # already above 0.10
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+
+        # current_price=0.30 -> adverse_move = max(0, 0.50-0.30) = 0.20 > 0.10
+        # but prior was already > 0.10 -> no fresh crossing
+        mock_market = SimpleNamespace(yes_price=0.30)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        with capture_logs() as log_output:
+            await update_unrealized_adverse_moves(mock_db, mock_client)
+
+        triggered = [e for e in log_output if e.get("event") == "unrealized_adverse_triggered"]
+        assert len(triggered) == 0
