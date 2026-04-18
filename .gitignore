@@ -31,5 +31,7 @@ Thumbs.db
 .pytest_cache/
 htmlcov/
 .coverage
-.claude/
+.claude/settings.local.json
+.claude/worktrees/
+.claude/plans/
 nul
