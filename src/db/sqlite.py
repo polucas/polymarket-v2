@@ -441,6 +441,16 @@ class Database:
             max_drawdown=row["max_drawdown"],
         )
 
+    async def init_portfolio_if_missing(self, initial_bankroll: float) -> None:
+        now = _utcnow().isoformat()
+        await self._conn.execute(
+            """INSERT OR IGNORE INTO portfolio
+               (id, cash_balance, total_equity, total_pnl, peak_equity, max_drawdown, updated_at)
+               VALUES (1, ?, ?, 0.0, ?, 0.0, ?)""",
+            (initial_bankroll, initial_bankroll, initial_bankroll, now),
+        )
+        await self._conn.commit()
+
     async def save_portfolio(self, p: Portfolio) -> None:
         now = _utcnow().isoformat()
         await self._conn.execute(

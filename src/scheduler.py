@@ -531,6 +531,13 @@ class Scheduler:
             await self._db.save_trade(skip_record)
             return
 
+        # Short-circuit: zero signals guarantees no_direction via prompt anchoring.
+        # Skip LLM + orderbook fetch; record skip_reason for analytics.
+        if not (twitter_signals or relevant_rss):
+            skip_record = self._build_skip_record(market, "no_signals", experiment_run, tier)
+            await self._db.save_trade(skip_record)
+            return
+
         # Get orderbook
         orderbook = await self._polymarket.get_orderbook(market.clob_token_id_yes, market.market_id)
 

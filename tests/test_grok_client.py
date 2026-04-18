@@ -139,9 +139,10 @@ class TestParseJsonSafe:
 class TestValidateGrokResponse:
     def test_missing_required_fields_returns_none(self):
         incomplete = {"estimated_probability": 0.5, "confidence": 0.5}
-        # Missing: reasoning
+        # Missing: reasoning -> defaults to ""
         result = _validate_llm_response(incomplete)
-        assert result is None
+        assert result is not None
+        assert result["reasoning"] == ""
 
     def test_probability_above_1_returns_none(self):
         data = _valid_grok_dict(estimated_probability=1.5)
@@ -181,18 +182,20 @@ class TestValidateGrokResponse:
         assert result is None
 
     def test_missing_only_confidence(self):
-        """#12 — Response missing only 'confidence' -> validation fails."""
+        """#12 — Response missing only 'confidence' -> defaults to 0.50."""
         data = _valid_grok_dict()
         del data["confidence"]
         result = _validate_llm_response(data)
-        assert result is None
+        assert result is not None
+        assert result["confidence"] == pytest.approx(0.50)
 
     def test_missing_only_reasoning(self):
-        """#13 — Response missing only 'reasoning' -> validation fails."""
+        """#13 — Response missing only 'reasoning' -> defaults to ""."""
         data = _valid_grok_dict()
         del data["reasoning"]
         result = _validate_llm_response(data)
-        assert result is None
+        assert result is not None
+        assert result["reasoning"] == ""
 
     def test_response_without_signal_info_types_passes(self):
         """#14 — signal_info_types is no longer required; response without it passes validation."""
@@ -210,6 +213,35 @@ class TestValidateGrokResponse:
         data = _valid_grok_dict(confidence=-0.1)
         result = _validate_llm_response(data)
         assert result is None
+
+    def test_only_estimated_probability_defaults_others(self):
+        """Only estimated_probability present -> confidence=0.50, reasoning=''."""
+        result = _validate_llm_response({"estimated_probability": 0.6})
+        assert result is not None
+        assert result["estimated_probability"] == pytest.approx(0.6)
+        assert result["confidence"] == pytest.approx(0.50)
+        assert result["reasoning"] == ""
+
+    def test_missing_estimated_probability_returns_none(self):
+        """Missing estimated_probability (strict field) -> None."""
+        result = _validate_llm_response({"confidence": 0.7, "reasoning": "ok"})
+        assert result is None
+
+    def test_probability_out_of_range_returns_none(self):
+        """estimated_probability=1.5 (> 1) -> None."""
+        result = _validate_llm_response(
+            {"estimated_probability": 1.5, "confidence": 0.5, "reasoning": "x"}
+        )
+        assert result is None
+
+    def test_all_fields_present_passes_through(self):
+        """All 3 fields present -> dict returned unchanged (regression guard)."""
+        data = {"estimated_probability": 0.72, "confidence": 0.85, "reasoning": "Strong signal."}
+        result = _validate_llm_response(data)
+        assert result is not None
+        assert result["estimated_probability"] == pytest.approx(0.72)
+        assert result["confidence"] == pytest.approx(0.85)
+        assert result["reasoning"] == "Strong signal."
 
 
 # ---------------------------------------------------------------------------

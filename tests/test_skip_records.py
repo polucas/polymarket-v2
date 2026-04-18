@@ -7,8 +7,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.config import MonkModeConfig, Settings
-from src.models import Market, Portfolio
+from src.models import Market, Portfolio, Signal
 from src.scheduler import Scheduler
+
+
+def _make_signal(**overrides) -> Signal:
+    defaults = dict(
+        source="rss",
+        source_tier="S3",
+        info_type=None,
+        content="test signal content",
+        credibility=0.80,
+        author="TestAuthor",
+        followers=50_000,
+        engagement=100,
+        timestamp=datetime.now(timezone.utc),
+        headline_only=False,
+    )
+    defaults.update(overrides)
+    return Signal(**defaults)
 
 
 def _build_scheduler() -> Scheduler:
@@ -87,7 +104,9 @@ class TestGrokFailureSkipRecord:
 
         scheduler._market_type_mgr.should_disable.return_value = False
         scheduler._grok.call_grok_with_retry = AsyncMock(return_value=None)
-        scheduler._twitter.get_signals_for_market = AsyncMock(return_value=[])
+        scheduler._twitter.get_signals_for_market = AsyncMock(
+            return_value=[_make_signal()]
+        )
         scheduler._polymarket.get_orderbook = AsyncMock(
             return_value=MagicMock(bids=[], asks=[])
         )
@@ -127,7 +146,9 @@ class TestPositionTooSmallSkipRecord:
             "reasoning": "test",
             "signal_info_types": [],
         })
-        scheduler._twitter.get_signals_for_market = AsyncMock(return_value=[])
+        scheduler._twitter.get_signals_for_market = AsyncMock(
+            return_value=[_make_signal()]
+        )
         scheduler._polymarket.get_orderbook = AsyncMock(
             return_value=MagicMock(bids=[], asks=[])
         )

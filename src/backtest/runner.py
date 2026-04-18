@@ -18,7 +18,6 @@ from src.learning.calibration import CalibrationManager
 from src.learning.experiments import start_experiment
 from src.learning.market_type import MarketTypeManager
 from src.learning.signal_tracker import SignalTrackerManager
-from src.models import Portfolio
 from src.scheduler import Scheduler
 
 log = structlog.get_logger()
@@ -47,14 +46,8 @@ class BacktestRunner:
         await run_migrations(db)
 
         # Initialize portfolio in outputs DB
+        await db.init_portfolio_if_missing(self._settings.INITIAL_BANKROLL)
         portfolio = await db.load_portfolio()
-        if portfolio.total_equity == 0:
-            portfolio = Portfolio(
-                cash_balance=self._settings.INITIAL_BANKROLL,
-                total_equity=self._settings.INITIAL_BANKROLL,
-                peak_equity=self._settings.INITIAL_BANKROLL,
-            )
-            await db.save_portfolio(portfolio)
 
         # Create experiment run (required by FK constraint on trade_records)
         run_id = f"backtest_{self._start_dt.strftime('%Y%m%d')}_{self._end_dt.strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"

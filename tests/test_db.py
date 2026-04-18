@@ -182,6 +182,29 @@ class TestPortfolio:
 
 
 @pytest.mark.asyncio
+class TestPortfolioInit:
+    async def test_init_portfolio_if_missing_creates_row(self, db):
+        await db.init_portfolio_if_missing(10000.0)
+        loaded = await db.load_portfolio()
+        assert loaded.cash_balance == 10000.0
+        assert loaded.total_equity == 10000.0
+        assert loaded.peak_equity == 10000.0
+        assert loaded.total_pnl == 0.0
+        assert loaded.max_drawdown == 0.0
+
+    async def test_init_portfolio_if_missing_is_noop(self, db):
+        custom = Portfolio(cash_balance=7777.0, total_equity=8000.0, total_pnl=223.0, peak_equity=8500.0, max_drawdown=0.05)
+        await db.save_portfolio(custom)
+        await db.init_portfolio_if_missing(10000.0)
+        loaded = await db.load_portfolio()
+        assert loaded.cash_balance == 7777.0
+        assert loaded.total_equity == 8000.0
+        assert loaded.total_pnl == 223.0
+        assert loaded.peak_equity == 8500.0
+        assert loaded.max_drawdown == 0.05
+
+
+@pytest.mark.asyncio
 class TestAPICosts:
     async def test_increment_new(self, db):
         await db.increment_api_cost("minimax", tokens_in=1000, tokens_out=200)

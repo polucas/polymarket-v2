@@ -63,26 +63,46 @@ def parse_json_safe(raw: str) -> Optional[dict]:
 
 
 def _validate_llm_response(data: dict) -> Optional[dict]:
-    """Validate and coerce LLM response fields."""
-    missing = REQUIRED_FIELDS - set(data.keys())
-    if missing:
-        log.warning("llm_missing_fields", missing=list(missing))
-        return None
+    """Validate and coerce LLM response fields.
 
-    # Type coercion
+    estimated_probability: required, must be coercible to float in [0, 1].
+    confidence: optional, defaults to 0.50 if missing; must be in [0, 1] if present.
+    reasoning: optional, defaults to "" if missing.
+    """
+    # --- estimated_probability: strict ---
+    if "estimated_probability" not in data:
+        log.warning("llm_missing_fields", missing=["estimated_probability"])
+        return None
     try:
         prob = float(data["estimated_probability"])
-        conf = float(data["confidence"])
     except (ValueError, TypeError):
-        log.warning("llm_invalid_types")
+        log.warning("llm_invalid_types", field="estimated_probability")
         return None
-
-    if not (0 <= prob <= 1) or not (0 <= conf <= 1):
-        log.warning("llm_out_of_range", prob=prob, conf=conf)
+    if not (0 <= prob <= 1):
+        log.warning("llm_out_of_range", field="estimated_probability", value=prob)
         return None
-
     data["estimated_probability"] = prob
-    data["confidence"] = conf
+
+    # --- confidence: optional, default 0.50 ---
+    if "confidence" not in data:
+        log.info("llm_default_confidence", market="unknown")
+        data["confidence"] = 0.50
+    else:
+        try:
+            conf = float(data["confidence"])
+        except (ValueError, TypeError):
+            log.warning("llm_invalid_types", field="confidence")
+            return None
+        if not (0 <= conf <= 1):
+            log.warning("llm_out_of_range", field="confidence", value=conf)
+            return None
+        data["confidence"] = conf
+
+    # --- reasoning: optional, default "" ---
+    if "reasoning" not in data:
+        log.info("llm_default_reasoning", market="unknown")
+        data["reasoning"] = ""
+
     return data
 
 

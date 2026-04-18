@@ -164,6 +164,7 @@ async def lifespan(app: FastAPI):
     ws_exit_mgr = RealTimeExitManager(db=db, polymarket_client=polymarket, settings=settings)
     await ws_exit_mgr.start()
 
+    await db.init_portfolio_if_missing(settings.INITIAL_BANKROLL)
     _app_state.update(
         db=db,
         settings=settings,

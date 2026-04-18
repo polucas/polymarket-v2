@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.models import Portfolio, Signal
+from src.models import Portfolio, Signal, Market
 from src.config import Settings, MonkModeConfig
 from src.scheduler import Scheduler
 
@@ -429,3 +429,93 @@ class TestPaperModePositionThreshold:
         min_position = 0.50 if scheduler._settings.ENVIRONMENT == "paper" else 1.0
         position_size = 1.00
         assert position_size >= min_position
+
+
+# ---------------------------------------------------------------------------
+# Tests: No-signals short-circuit in _process_market
+# ---------------------------------------------------------------------------
+
+
+def _make_market(
+    market_id: str = "mkt-001",
+    question: str = "Will X happen?",
+    yes_price: float = 0.50,
+    market_type: str = "political",
+) -> Market:
+    return Market(
+        market_id=market_id,
+        question=question,
+        yes_price=yes_price,
+        no_price=1.0 - yes_price,
+        hours_to_resolution=24.0,
+        market_type=market_type,
+        keywords=["x", "happen"],
+    )
+
+
+class TestNoSignalsShortCircuit:
+    """When both twitter_signals and relevant_rss are empty, _process_market
+    must save a no_signals SKIP and return without calling the LLM or orderbook."""
+
+    @pytest.mark.asyncio
+    async def test_no_signals_skips_without_llm_or_orderbook(self):
+        """Empty twitter + empty rss => save skip(no_signals), no LLM, no orderbook."""
+        scheduler = _build_scheduler()
+        market = _make_market()
+
+        # market_type_mgr must not disable the market
+        scheduler._market_type_mgr.should_disable.return_value = False
+        # twitter returns empty list
+        scheduler._twitter.get_signals_for_market.return_value = []
+
+        with patch("src.scheduler.extract_keywords", return_value=["x", "happen"]):
+            await scheduler._process_market(
+                market=market,
+                rss_signals=[],  # no RSS signals either
+                scan_mode="normal",
+                candidates=[],
+                all_skips=[],
+                today_trades=[],
+                experiment_run="exp-001",
+                tier=1,
+            )
+
+        # save_trade called exactly once with no_signals skip
+        scheduler._db.save_trade.assert_called_once()
+        saved_record = scheduler._db.save_trade.call_args[0][0]
+        assert saved_record.skip_reason == "no_signals"
+
+        # LLM and orderbook must NOT have been called
+        scheduler._grok.call_grok_with_retry.assert_not_called()
+        scheduler._polymarket.get_orderbook.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_with_signals_continues_past_shortcircuit(self):
+        """Providing at least one signal bypasses the no_signals short-circuit."""
+        scheduler = _build_scheduler()
+        market = _make_market()
+
+        scheduler._market_type_mgr.should_disable.return_value = False
+
+        one_signal = _make_signal(content="will x happen politics")
+        scheduler._twitter.get_signals_for_market.return_value = [one_signal]
+
+        # LLM returns None to short-circuit further processing (grok_failed)
+        scheduler._grok.call_grok_with_retry.return_value = None
+        scheduler._polymarket.get_orderbook.return_value = MagicMock()
+
+        with patch("src.scheduler.extract_keywords", return_value=["x", "happen"]):
+            await scheduler._process_market(
+                market=market,
+                rss_signals=[],
+                scan_mode="normal",
+                candidates=[],
+                all_skips=[],
+                today_trades=[],
+                experiment_run="exp-001",
+                tier=1,
+            )
+
+        # orderbook AND grok must have been called (short-circuit was NOT hit)
+        scheduler._polymarket.get_orderbook.assert_called()
+        scheduler._grok.call_grok_with_retry.assert_called_once()
