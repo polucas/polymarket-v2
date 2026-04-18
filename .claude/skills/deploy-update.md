@@ -33,7 +33,7 @@ Controlled deploy of the Polymarket v2 bot from the dev machine to the VPS. Each
    ```
 6. Install any new deps:
    ```bash
-   ssh root@49.13.159.52 "cd /root/polymarket-v2 && source .venv/bin/activate && pip install -r requirements.txt --quiet"
+   ssh root@49.13.159.52 "cd /root/polymarket-v2 && venv/bin/pip install -r requirements.txt --quiet"
    ```
    If pip fails, STOP — do not restart.
 7. **CONFIRM BEFORE step 8** — "Restart polymarket systemd unit?"

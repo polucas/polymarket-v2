@@ -26,7 +26,7 @@ None.
    Required: `POLYMARKET_PRIVATE_KEY`, `POLYMARKET_SECRET`, `POLYMARKET_PASSPHRASE`. Optional (EOA can skip): `POLYMARKET_FUNDER_ADDRESS`. Missing any required → HALT.
 3. `py-clob-client` version (must be `~=0.34.0` post April 6 upgrade):
    ```bash
-   ssh root@49.13.159.52 "cd /root/polymarket-v2 && .venv/bin/pip show py-clob-client | grep Version"
+   ssh root@49.13.159.52 "cd /root/polymarket-v2 && venv/bin/pip show py-clob-client | grep Version"
    ```
 4. Recent paper-mode performance (reuse the raw-Brier table from `learning-status` step 4):
    ```bash
@@ -41,11 +41,11 @@ None.
 6. **STOP — user confirmation gate 1.** Prompt: "About to run `scripts/setup_clob_allowance.py` (one-time USDC allowance approval on-chain) and then `scripts/live_smoke_test.py` (places a real $0.01 limit order far from market). Continue?" If the user says no, end the skill.
 7. Run allowance setup (no-op after the first successful run):
    ```bash
-   ssh root@49.13.159.52 "cd /root/polymarket-v2 && .venv/bin/python scripts/setup_clob_allowance.py"
+   ssh root@49.13.159.52 "cd /root/polymarket-v2 && venv/bin/python scripts/setup_clob_allowance.py"
    ```
 8. Run smoke test. **Remind user verbally: it does NOT auto-cancel — they must manually cancel the order on [https://polymarket.com](https://polymarket.com) after this step.**
    ```bash
-   ssh root@49.13.159.52 "cd /root/polymarket-v2 && .venv/bin/python scripts/live_smoke_test.py"
+   ssh root@49.13.159.52 "cd /root/polymarket-v2 && venv/bin/python scripts/live_smoke_test.py"
    ```
    Non-zero exit → HALT, do not suggest the final flip.
 9. **STOP — user confirmation gate 2.** Prompt: "Smoke test clean. Flip `ENVIRONMENT=paper → live` in `/root/polymarket-v2/.env` and run `deploy-update`?" End of skill; do not flip the env file automatically.
