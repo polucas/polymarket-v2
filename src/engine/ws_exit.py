@@ -120,8 +120,12 @@ class RealTimeExitManager:
                                 try:
                                     data = json.loads(msg.data)
                                     await self._handle_message(data)
-                                except json.JSONDecodeError:
-                                    pass
+                                except json.JSONDecodeError as e:
+                                    log.warning(
+                                        "ws_message_decode_error",
+                                        raw_data=msg.data[:200] if hasattr(msg, "data") else None,
+                                        error=str(e),
+                                    )
                             elif msg.type in (
                                 aiohttp.WSMsgType.CLOSED,
                                 aiohttp.WSMsgType.ERROR,
@@ -161,6 +165,7 @@ class RealTimeExitManager:
             "assets_ids": token_ids,
             "type": "market",
         })
+        log.info("ws_subscription_sent", token_count=len(token_ids), tokens=token_ids[:5])
 
     # ------------------------------------------------------------------
     # Message handling
@@ -173,16 +178,23 @@ class RealTimeExitManager:
 
         for event in events:
             if not isinstance(event, dict):
+                log.debug("ws_event_unrecognized", event_type=type(event).__name__)
                 continue
 
             asset_id = event.get("asset_id", "")
             trade = self._active_positions.get(asset_id)
             if trade is None:
+                log.debug("ws_event_asset_not_tracked", asset_id=asset_id)
                 continue
 
             # Extract best bid — this is the price we'd get if selling
             bids = event.get("bids", [])
             if not bids:
+                log.warning(
+                    "ws_event_missing_fields",
+                    event_type=event.get("event_type"),
+                    asset_id=asset_id,
+                )
                 continue
 
             try:

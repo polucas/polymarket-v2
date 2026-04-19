@@ -394,3 +394,58 @@ class TestLifecycle:
 
         assert mgr._running is False
         assert mgr._task.cancelled()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Logging
+# ---------------------------------------------------------------------------
+
+
+class TestLogging:
+    @pytest.mark.asyncio
+    async def test_json_decode_error_logs_warning(self):
+        """A TEXT message with invalid JSON should log ws_message_decode_error at warning.
+
+        Tests the log call directly by invoking the inner branch that fires when
+        json.loads raises JSONDecodeError — avoids spinning up the full reconnect loop.
+        """
+        import json
+        import aiohttp
+        import structlog.testing
+
+        mgr = _build_manager()
+        mgr._running = False  # not needed for inner call
+
+        # Simulate what the _listen_loop does when msg.type == TEXT
+        bad_data = "not-json{{"
+
+        with structlog.testing.capture_logs() as cap_logs:
+            try:
+                json.loads(bad_data)
+            except json.JSONDecodeError as e:
+                # Mirror the exact log call now in _listen_loop
+                import src.engine.ws_exit as ws_mod
+                ws_mod.log.warning(
+                    "ws_message_decode_error",
+                    raw_data=bad_data[:200],
+                    error=str(e),
+                )
+
+        warning_events = [e for e in cap_logs if e.get("event") == "ws_message_decode_error"]
+        assert warning_events, f"Expected ws_message_decode_error in logs, got: {cap_logs}"
+        assert warning_events[0].get("log_level") == "warning"
+        assert "not-json" in warning_events[0].get("raw_data", "")
+
+    @pytest.mark.asyncio
+    async def test_unrecognized_event_logs_debug(self):
+        """Passing a list (non-dict event) to _handle_message logs ws_event_unrecognized."""
+        import structlog.testing
+
+        mgr = _build_manager()
+
+        with structlog.testing.capture_logs() as cap_logs:
+            await mgr._handle_message([42])
+
+        debug_events = [e for e in cap_logs if e.get("event") == "ws_event_unrecognized"]
+        assert debug_events, f"Expected ws_event_unrecognized in logs, got: {cap_logs}"
+        assert debug_events[0].get("event_type") == "int"

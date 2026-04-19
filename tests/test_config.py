@@ -48,6 +48,16 @@ class TestSettings:
         s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
         assert s.WEAK_SIGNAL_STRENGTH_THRESHOLD == 0.35
 
+    def test_evaluation_cooldown_hours_default(self, monkeypatch):
+        monkeypatch.delenv("EVALUATION_COOLDOWN_HOURS", raising=False)
+        s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
+        assert s.EVALUATION_COOLDOWN_HOURS == 4.0
+
+    def test_prescreen_min_confidence_default(self, monkeypatch):
+        monkeypatch.delenv("PRESCREEN_MIN_CONFIDENCE", raising=False)
+        s = Settings(XAI_API_KEY="t", TWITTER_API_KEY="t")
+        assert s.PRESCREEN_MIN_CONFIDENCE == 0.25
+
 
 class TestMonkModeConfig:
     def test_from_settings(self):

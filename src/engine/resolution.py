@@ -61,8 +61,32 @@ async def auto_resolve_trades(db: Database, polymarket_client) -> List[TradeReco
                     if now < expected_resolution:
                         continue
                     # Past resolution time but market not resolved - check current price
+                    hours_past_crypto = (now - expected_resolution).total_seconds() / 3600
+                    log.info(
+                        "resolution_fallback_crypto_price",
+                        market_id=trade.market_id,
+                        hours_past_resolution=round(hours_past_crypto, 2),
+                        polymarket_yes_price=market.yes_price,
+                        inferred_outcome=1 if market.yes_price > 0.5 else 0,
+                    )
                     outcome = market.yes_price > 0.5
                 else:
+                    _res_dt = trade.resolution_datetime
+                    if _res_dt is not None:
+                        _now = Clock.utcnow()
+                        _res_dt_aware = _res_dt.replace(tzinfo=timezone.utc) if _res_dt.tzinfo is None else _res_dt
+                        hours_past = (_now - _res_dt_aware).total_seconds() / 3600
+                    else:
+                        hours_past = 0.0
+                    log.info(
+                        "resolution_skipped_unresolved",
+                        market_id=trade.market_id,
+                        market_type=trade.market_type,
+                        resolution_datetime=trade.resolution_datetime.isoformat() if trade.resolution_datetime else None,
+                        hours_past_resolution=round(hours_past, 2),
+                        polymarket_resolved_flag=market.resolved,
+                        polymarket_yes_price=market.yes_price,
+                    )
                     continue
             else:
                 outcome = market.resolution == "YES"

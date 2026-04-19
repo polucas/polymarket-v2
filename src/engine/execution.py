@@ -162,6 +162,8 @@ async def execute_trade(
         market_cluster_id=candidate.market_cluster_id,
         clob_token_id_yes=market.clob_token_id_yes,
         clob_token_id_no=market.clob_token_id_no,
+        spread_at_decision=candidate.spread_at_decision,
+        vwap_price=candidate.vwap_price,
     )
 
     await db.save_trade(record)

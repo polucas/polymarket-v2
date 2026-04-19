@@ -411,3 +411,37 @@ class TestExecuteTradePortfolioUpdate:
         assert pos.size_usd == 200.0
         # save_portfolio should have been called
         mock_db.save_portfolio.assert_awaited_once()
+
+
+class TestExecuteTradeOrderbookFieldPersistence:
+    """Verify spread_at_decision, vwap_price, orderbook_depth_usd are propagated
+    from TradeCandidate through to the returned TradeRecord."""
+
+    @pytest.mark.asyncio
+    async def test_orderbook_fields_persisted_to_trade_record(self):
+        """spread_at_decision, vwap_price, and orderbook_depth_usd must be copied
+        from the candidate into the TradeRecord on a successful paper fill."""
+        candidate = _make_candidate(
+            spread_at_decision=0.012,
+            vwap_price=0.523,
+            orderbook_depth=5000.0,
+        )
+        portfolio = Portfolio(cash_balance=5000.0, open_positions=[])
+        mock_db = AsyncMock()
+        mock_client = AsyncMock()
+
+        # random() = 0.0 guarantees maker fill for any price
+        with patch("src.engine.execution.random.random", return_value=0.0):
+            record = await execute_trade(
+                candidate=candidate,
+                portfolio=portfolio,
+                db=mock_db,
+                polymarket_client=mock_client,
+                environment="paper",
+                experiment_run="test-run",
+            )
+
+        assert record is not None
+        assert record.spread_at_decision == 0.012
+        assert record.vwap_price == 0.523
+        assert record.orderbook_depth_usd == 5000.0

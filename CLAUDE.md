@@ -86,7 +86,7 @@ docs/
 
 **Risk management (Monk Mode):** Daily loss -5%, weekly -10%, consecutive adverse cooldown (3+), max exposure 30%, API budget $15/day. All enforced in `src/engine/trade_decision.py`.
 
-**Duplicate bet prevention:** 24h cooldown after trading a market (`MARKET_COOLDOWN_HOURS`), plus Jaccard keyword-overlap similarity check at 60% threshold (`QUESTION_SIMILARITY_THRESHOLD`) to block near-duplicate questions. Additionally, a 2h evaluation cooldown (`EVALUATION_COOLDOWN_HOURS`) prevents re-calling MiniMax on the same market within 2 hours (silent skip, no DB record). Skip reasons: `market_cooldown`, `similar_to_{id}`.
+**Duplicate bet prevention:** 24h cooldown after trading a market (`MARKET_COOLDOWN_HOURS`), plus Jaccard keyword-overlap similarity check at 60% threshold (`QUESTION_SIMILARITY_THRESHOLD`) to block near-duplicate questions. Additionally, a 4h evaluation cooldown (`EVALUATION_COOLDOWN_HOURS`) prevents re-calling MiniMax on the same market within 4 hours (silent skip, no DB record). Skip reasons: `market_cooldown`, `similar_to_{id}`.
 
 **Daily self-check (Autoresearch):** Runs 15 min after nightly summary. Gathers metrics (win rate, ROI, Brier by type, calibration drift, skip reasons), calls MiniMax for analysis, persists to `daily_reviews` table + `data/daily_reviews/*.md`, sends Telegram alert. Does NOT auto-implement changes.
 
@@ -123,10 +123,10 @@ docs/
 - **Tier 1:** 15-min scan interval, resolution 15min-7d, 20 trades/day cap, 0% fee, 3% min edge
 - **Tier 2:** 2-3 min scan (only during active news window), 15-min resolution, 3 trades/day cap
 - **Market fetch:** 2 pages x 500 markets sorted by volume (`MARKET_PAGE_SIZE=500`, `MARKET_FETCH_PAGES=2`) = up to 1,000 most active markets per scan
-- **Pre-screen gate:** `PRESCREEN_ENABLED=true`, `PRESCREEN_MIN_EDGE=0.05`, `PRESCREEN_MIN_CONFIDENCE=0.25`, `PRESCREEN_MAX_TOKENS=300` — cheap LLM check before Twitter fetch; filters ~25-40% of markets
+- **Pre-screen gate:** `PRESCREEN_ENABLED=true`, `PRESCREEN_MIN_EDGE=0.05`, `PRESCREEN_MIN_CONFIDENCE=0.25`, `PRESCREEN_MAX_TOKENS=1000` — cheap LLM check before Twitter fetch; filters ~25-40% of markets
 - **Price filter:** Skip markets outside 5%-95% YES range (`MIN_TRADEABLE_PRICE=0.05`, `MAX_TRADEABLE_PRICE=0.95`)
 - **API budget:** $15/day (`DAILY_API_BUDGET_USD=15.0`)
-- **Duplicate prevention:** 24h market cooldown, 2h evaluation cooldown, 60% question similarity threshold
+- **Duplicate prevention:** 24h market cooldown, 4h evaluation cooldown, 60% question similarity threshold
 - **Environment:** `ENVIRONMENT=paper` (start here) or `live`
 - **DB:** SQLite at `data/predictor.db` (WAL mode)
 - **RSS polling:** 30s independent cycle (`RSS_POLL_INTERVAL_SECONDS=30`)
@@ -156,7 +156,7 @@ docs/
 - **Paper mode relaxations:** Min position threshold is $0.50 in paper mode vs $1.00 in live. `TIER1_MIN_EDGE` defaults to 0.03 (can increase for live).
 - **Daily reviews:** Written to both DB (`daily_reviews` table) and `data/daily_reviews/YYYY-MM-DD.md`. Check `/reviews` endpoint or the markdown files for daily performance analysis.
 - **OrderBookLevel vs plain floats:** `OrderBook.bids` and `OrderBook.asks` are `List[OrderBookLevel]` (price + size), NOT plain floats. Bids are sorted descending by price, asks ascending, before slicing top 5 from the CLOB API. Tests using mock OrderBooks must use `OrderBookLevel` objects or mock the `spread`/`total_depth` properties.
-- **Evaluation cooldown:** Markets that received a MiniMax full evaluation (including low_edge SKIPs) are silently skipped for 2 hours (`EVALUATION_COOLDOWN_HOURS`). No DB record is written for these skips. This cooldown is checked BEFORE the pre-screen gate — if a market is on cooldown, it's skipped instantly (no LLM, no Twitter). Pre-screen filtered markets do NOT trigger evaluation cooldown (they never reached full LLM), so they will be re-evaluated next scan.
+- **Evaluation cooldown:** Markets that received a MiniMax full evaluation (including low_edge SKIPs) are silently skipped for 4 hours (`EVALUATION_COOLDOWN_HOURS`). No DB record is written for these skips. This cooldown is checked BEFORE the pre-screen gate — if a market is on cooldown, it's skipped instantly (no LLM, no Twitter). Pre-screen filtered markets do NOT trigger evaluation cooldown (they never reached full LLM), so they will be re-evaluated next scan.
 - **Early-exited trades have no actual_outcome:** They have PnL and `exit_type` set but `actual_outcome` is NULL. The learning system (calibration, Brier) correctly skips them. The `get_open_trades()` query filters `AND exit_type IS NULL` to avoid re-processing.
 - **VWAP returns price, not 1.0:** `compute_vwap()` returns `total_usd / total_shares` — the volume-weighted average *price* per share, not a USD ratio. VWAP is used in `kelly_size_vwap()` to cap position size at the depth where the trade remains profitable.
 - **RSS accumulator lock:** `poll_and_accumulate()` uses an `asyncio.Lock` to prevent race conditions with `consume_signals()`. The lock is per-instance, not global.

@@ -69,13 +69,13 @@ class Settings(BaseSettings):
 
     # Duplicate Prevention
     MARKET_COOLDOWN_HOURS: float = 24.0
-    EVALUATION_COOLDOWN_HOURS: float = 2.0  # Skip re-calling Grok on same market within this window
+    EVALUATION_COOLDOWN_HOURS: float = 4.0  # Skip re-calling Grok on same market within 4 hours
     QUESTION_SIMILARITY_THRESHOLD: float = 0.60
 
     # Pre-screen: cheap LLM gate before Twitter API call
     PRESCREEN_ENABLED: bool = True
     PRESCREEN_MIN_EDGE: float = 0.05        # raw |prob - price| gate (intentionally loose)
-    PRESCREEN_MIN_CONFIDENCE: float = 0.35   # LLM confidence gate
+    PRESCREEN_MIN_CONFIDENCE: float = 0.25   # LLM confidence gate (loose — filters only very low confidence)
     PRESCREEN_MAX_TOKENS: int = 500          # small response budget
     WEAK_SIGNAL_STRENGTH_THRESHOLD: float = 0.45  # avg credibility below this → skip before orderbook + LLM
 

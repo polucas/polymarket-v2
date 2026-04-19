@@ -445,3 +445,116 @@ class TestUnrealizedAdverseTriggeredLog:
 
         triggered = [e for e in log_output if e.get("event") == "unrealized_adverse_triggered"]
         assert len(triggered) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 31: resolution_skipped_unresolved log for non-crypto unresolved market
+# ---------------------------------------------------------------------------
+
+
+class TestResolutionSkippedUnresolvedLog:
+    """Test 31: resolution_skipped_unresolved log emitted for political trade past resolution_datetime."""
+
+    @pytest.mark.asyncio
+    async def test_skipped_unresolved_log_emitted(self):
+        """Political trade 48h past resolution_datetime; market not resolved.
+        Expect log 'resolution_skipped_unresolved' once with correct fields.
+        update_trade must NOT be called. actual_outcome stays None."""
+        now = datetime(2026, 4, 19, 12, 0, 0, tzinfo=timezone.utc)
+        res_dt = now - timedelta(hours=48)
+
+        trade = _make_record(
+            market_type="political",
+            action="BUY_YES",
+            position_size_usd=100.0,
+            actual_outcome=None,
+            pnl=None,
+        )
+        trade.resolution_datetime = res_dt
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+        mock_db.load_portfolio.return_value = Portfolio()
+
+        mock_market = SimpleNamespace(
+            resolved=False,
+            resolution=None,
+            yes_price=0.8,
+        )
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        with patch("src.engine.resolution.Clock") as mock_clock, \
+             capture_logs() as log_output:
+            mock_clock.utcnow.return_value = now
+            await auto_resolve_trades(mock_db, mock_client)
+
+        skipped = [e for e in log_output if e.get("event") == "resolution_skipped_unresolved"]
+        assert len(skipped) == 1, f"Expected 1 log entry, got {len(skipped)}: {log_output}"
+        rec = skipped[0]
+        assert rec["market_id"] == trade.market_id
+        assert rec["market_type"] == "political"
+        assert rec["polymarket_resolved_flag"] is False
+        assert abs(rec["polymarket_yes_price"] - 0.8) < 1e-9
+        assert abs(rec["hours_past_resolution"] - 48.0) < 0.1
+
+        mock_db.update_trade.assert_not_awaited()
+        assert trade.actual_outcome is None
+
+
+# ---------------------------------------------------------------------------
+# Test 32: resolution_fallback_crypto_price log for crypto_15m past window
+# ---------------------------------------------------------------------------
+
+
+class TestResolutionFallbackCryptoPriceLog:
+    """Test 32: resolution_fallback_crypto_price log emitted for crypto_15m past window."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_crypto_price_log_emitted(self):
+        """crypto_15m trade 45min old with 0.25h window (15min) -> past window.
+        Market unresolved, yes_price=0.7 -> inferred YES.
+        Expect log 'resolution_fallback_crypto_price' with inferred_outcome=1.
+        actual_outcome=True written."""
+        now = datetime(2026, 4, 19, 12, 0, 0, tzinfo=timezone.utc)
+        trade_ts = now - timedelta(minutes=45)
+
+        trade = _make_record(
+            market_type="crypto_15m",
+            action="BUY_YES",
+            position_size_usd=100.0,
+            resolution_window_hours=0.25,
+            actual_outcome=None,
+            pnl=None,
+        )
+        trade.timestamp = trade_ts
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+        mock_db.load_portfolio.return_value = Portfolio()
+        mock_db.save_portfolio.return_value = None
+
+        mock_market = SimpleNamespace(
+            resolved=False,
+            resolution=None,
+            yes_price=0.7,
+        )
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        with patch("src.engine.resolution.Clock") as mock_clock, \
+             capture_logs() as log_output:
+            mock_clock.utcnow.return_value = now
+            await auto_resolve_trades(mock_db, mock_client)
+
+        fallback = [e for e in log_output if e.get("event") == "resolution_fallback_crypto_price"]
+        assert len(fallback) == 1, f"Expected 1 log entry, got {len(fallback)}: {log_output}"
+        rec = fallback[0]
+        assert rec["market_id"] == trade.market_id
+        assert rec["inferred_outcome"] == 1
+        assert abs(rec["polymarket_yes_price"] - 0.7) < 1e-9
+        # hours_past_resolution: 45min - 15min window = 30min = 0.5h
+        assert abs(rec["hours_past_resolution"] - 0.5) < 0.05
+
+        assert trade.actual_outcome is True
+        mock_db.update_trade.assert_awaited_once()
