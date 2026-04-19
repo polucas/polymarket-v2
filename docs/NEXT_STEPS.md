@@ -12,15 +12,11 @@ Round 1 fixes (§0d portfolio init, §0c narrow empty-signals short-circuit, §0
 
 **Baseline after Round 2:** 22 executed / 48h (~11/day). Target 12-15/day without dropping WR <68% or mean edge <0.04.
 
-**Morning routine:**
-1. `/vps-health-check` — systemd + 24h action counts (expect BUY_YES + BUY_NO non-zero).
-2. `/skip-reason-analyzer 24` — top 3 reasons. Alarm thresholds:
-   - `no_direction > 50/24h` → regression on Round 2 weak-signals gate
-   - `prescreen_parse_failed > 20/24h` in `grep -c data/bot.log` → token raise insufficient (consider 500→700)
-   - `similar_to_* > 50/24h` on any single hot market → extractor unification regressed
-   - `weak_signals_* > 200/24h` → threshold too aggressive, lower `WEAK_SIGNAL_STRENGTH_THRESHOLD` 0.45 → 0.35 via `.env` (no redeploy)
-3. `/db-diagnostics cash-reconcile` — alarm if DRIFT > $50.
-4. `/reviews/{today}` markdown — `trades_executed`, `win_rate`, `mean_edge`, `mean_confidence`.
+**Morning routine:** `/morning-check` — single skill consolidating all four checks below plus the alarm-threshold table (see `.claude/skills/morning-check.md`). Alarms printed inline name the exact env-only lever. Individual skills remain for drill-downs:
+- `/vps-health-check` — systemd + 24h action counts
+- `/skip-reason-analyzer 24` — sampled markets per top reason + fix category
+- `/db-diagnostics cash-reconcile` — DRIFT detail
+- `/reviews/{today}` — raw daily self-check JSON
 
 **Weekly rolling comparison (7-day vs prior 7-day):**
 - WR drop >5pp → investigate
@@ -56,6 +52,12 @@ ssh root@49.13.159.52 "/root/polymarket-v2/venv/bin/python -m src.manage prescre
 - If `unrealized_adverse_triggered` logs show real adverse moves → leave `consecutive_loss_cooldown=3` alone.
 - If most triggers are small temporary fluctuations (adverse bounces 10% then reverses) → consider raising adverse threshold 0.10 → 0.15 OR requiring sustained adverse for N minutes.
 - If `weak_signals_*` dominates >200/24h → lower threshold to 0.35 via `.env`.
+
+
+### 0d. Skip-reason health — monitor post-Round-2
+
+- no_signals=303 dominant — not alarm (markets with zero Twitter+RSS signals, expected). Possible volume lever: broaden RSS feed list or Twitter query scope, but out of scope for monitoring window.
+
 
 ---
 
