@@ -6,7 +6,7 @@ cases, case insensitivity, and real backtest miss cases.
 from __future__ import annotations
 
 import pytest
-from src.pipelines.market_classifier import classify_market_type, MARKET_TYPE_KEYWORDS
+from src.pipelines.market_classifier import classify_market_type, MARKET_TYPE_KEYWORDS, get_min_edge
 
 
 # ---------------------------------------------------------------------------
@@ -169,3 +169,23 @@ def test_iteration_order() -> None:
     assert keys.index("geopolitical") < keys.index("weather"), "geopolitical must come before weather (ukraine contains 'rain')"
     assert keys.index("weather") < keys.index("sports"), "weather must come before sports"
     assert keys.index("crypto_15m") < keys.index("political"), "crypto_15m must come before political"
+
+
+# ---------------------------------------------------------------------------
+# get_min_edge
+# ---------------------------------------------------------------------------
+
+def test_get_min_edge_crypto():
+    assert get_min_edge("crypto_15m") == 0.04
+
+
+def test_get_min_edge_sports():
+    assert get_min_edge("sports") == 0.05
+
+
+def test_get_min_edge_political():
+    assert get_min_edge("political") == 0.03
+
+
+def test_get_min_edge_unknown_uses_default():
+    assert get_min_edge("unknown", default=0.08) == 0.08

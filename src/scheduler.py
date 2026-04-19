@@ -39,7 +39,7 @@ from src.learning.market_type import MarketTypeManager
 from src.learning.signal_tracker import SignalTrackerManager
 from src.models import Market, Signal, TradeCandidate, TradeRecord
 from src.pipelines.context_builder import build_grok_context, build_prescreen_context, extract_keywords
-from src.pipelines.market_classifier import get_fee_rate
+from src.pipelines.market_classifier import get_fee_rate, get_min_edge
 from src.pipelines.polymarket import PolymarketClient
 from src.pipelines.rss import RSSPipeline
 from src.pipelines.twitter import TwitterDataPipeline
@@ -602,9 +602,18 @@ class Scheduler:
             best_bid=orderbook.best_bid, best_ask=orderbook.best_ask,
         ) - extra_edge
 
-        min_edge = self._settings.TIER1_MIN_EDGE if tier == 1 else self._settings.TIER2_MIN_EDGE
+        tier_fallback = self._settings.TIER1_MIN_EDGE if tier == 1 else self._settings.TIER2_MIN_EDGE
+        min_edge = get_min_edge(market.market_type, default=tier_fallback)
 
         if side == "SKIP" or edge < min_edge:
+            if side != "SKIP":
+                log.info(
+                    "low_edge_skip",
+                    market_id=market.market_id,
+                    market_type=market.market_type,
+                    edge=edge,
+                    min_edge=min_edge,
+                )
             skip_record = self._build_skip_record(
                 market, f"low_edge_{edge:.4f}" if side != "SKIP" else "no_direction",
                 experiment_run, tier,
@@ -616,7 +625,7 @@ class Scheduler:
             return
 
         # Kelly sizing
-        min_edge_for_vwap = self._settings.TIER1_MIN_EDGE if tier == 1 else self._settings.TIER2_MIN_EDGE
+        min_edge_for_vwap = min_edge
         position_size, vwap_price = kelly_size_vwap(
             adj_prob, market.yes_price, side,
             (await self._db.load_portfolio()).total_equity,

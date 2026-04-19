@@ -1,167 +1,127 @@
 # Next Steps — Polymarket v2
 
-_Last updated: 2026-04-18 after Round 2 deploy (§0b, §0c-1/2/3 landed)._
+_Last updated: 2026-04-19 after Round 4 deploy (§2b per-type `MIN_EDGE` landed). Round 2 verification window still running through 2026-04-25._
 
-## 0. Monitoring (post Round-2 verification window: 2026-04-18 → 2026-04-25)
+## Monitoring summary (what to watch, at a glance)
 
-Round 1 fixes (§0d portfolio init, §0c narrow empty-signals short-circuit, §0b validator soft-fields) + Round 2 fixes (§0b token raise, §0c-1 weak-signals gate, §0c-2 similar_to extractor unification, §0c-3 adverse instrumentation) are all deployed. Watch these metrics for 48h-7d to confirm no regression.
-
-### 0a. Daily trade-count monitoring (ongoing)
-
-**Goal:** grow daily trade count without degrading bet quality.
-
-**Baseline after Round 2:** 22 executed / 48h (~11/day). Target 12-15/day without dropping WR <68% or mean edge <0.04.
-
-**Morning routine:** `/morning-check` — single skill consolidating all four checks below plus the alarm-threshold table (see `.claude/skills/morning-check.md`). Alarms printed inline name the exact env-only lever. Individual skills remain for drill-downs:
-- `/vps-health-check` — systemd + 24h action counts
-- `/skip-reason-analyzer 24` — sampled markets per top reason + fix category
-- `/db-diagnostics cash-reconcile` — DRIFT detail
-- `/reviews/{today}` — raw daily self-check JSON
-
-**Weekly rolling comparison (7-day vs prior 7-day):**
-- WR drop >5pp → investigate
-- Mean edge drop >0.01 → investigate
-- Daily trade count rising but WR falling → revert last lever
-- `unrealized_adverse_triggered` log events per market_type → decide if `consecutive_loss_cooldown` needs tuning
-
-### 0b. `prescreen_parse_failed` — monitor post-fix
-
-**Round 2 fix:** raised `PRESCREEN_MAX_TOKENS` 300 → 500 (`src/config.py`). Deterministic truncation on 8 repeat-offender markets should stop.
-
-**Verify:**
-```bash
-ssh root@49.13.159.52 "grep -c prescreen_parse_failed /root/polymarket-v2/data/bot.log"
-ssh root@49.13.159.52 "/root/polymarket-v2/venv/bin/python -m src.manage prescreen_debug --market-id 1994998"  # (if the CLI exists; else run prescreen-debug skill)
-```
-
-**Alarm:** if parse_failed count grows by >50/hour post-deploy, escalate:
-1. Inspect raw MiniMax response for an offender (requires adding response logging to `call_prescreen`).
-2. Consider `PRESCREEN_MAX_TOKENS` 500 → 700 or tighten prompt to force shorter JSON.
-3. Skip-list cache (3 consecutive fails → skip pre-screen on that market).
-
-### 0c. Skip-reason health — monitor post-Round-2
-
-48h pre-Round-2 VPS state was 557 `no_direction`, 95 `consecutive_adverse_4`, 3 hot `similar_to_*` blockers (1943736/1928750/1987122).
-
-**Round 2 fixes:**
-- `no_direction`: weak-signals gate (`WEAK_SIGNAL_STRENGTH_THRESHOLD=0.45`) now skips pre-LLM when avg signal credibility is low. Expected post-deploy: `no_direction` <50/24h, `weak_signals_*` appears in breakdown.
-- `similar_to_*`: unified `extract_keywords()` on both sides of Jaccard. Expected: hot-blocker counts drop sharply; false-positive blocks gone.
-- `consecutive_adverse_4`: instrumentation only (`unrealized_adverse_triggered` structlog on 10% threshold crossing). No threshold change — collect 48h data then decide.
-
-**Decision after 48h of data:**
-- If `unrealized_adverse_triggered` logs show real adverse moves → leave `consecutive_loss_cooldown=3` alone.
-- If most triggers are small temporary fluctuations (adverse bounces 10% then reverses) → consider raising adverse threshold 0.10 → 0.15 OR requiring sustained adverse for N minutes.
-- If `weak_signals_*` dominates >200/24h → lower threshold to 0.35 via `.env`.
-
-
-### 0d. Skip-reason health — monitor post-Round-2
-
-- no_signals=303 dominant — not alarm (markets with zero Twitter+RSS signals, expected). Possible volume lever: broaden RSS feed list or Twitter query scope, but out of scope for monitoring window.
-
+| Window | Signal | Action on hit |
+|---|---|---|
+| Daily | `/morning-check` output | Named env-only lever per alarm row (see skill) |
+| 24h post-deploy | First BUY has `spread_at_decision`, `vwap_price`, `orderbook_depth_usd` all non-zero | If any zero → §1b fix regressed |
+| 24h post-deploy | First WS reconnect emits `ws_subscription_sent` | If never → §1g subscribe path broken |
+| 24h post-Round-4 | Mean executed edge by `market_type` ≥ per-type floor (sports 0.05, crypto_15m 0.04, political/etc 0.03) | If any type below floor → §2b regressed |
+| 48h (by 2026-04-21) | `resolution_skipped_unresolved` vs `resolution_fallback_crypto_price` counts by market_type | Decide §1d non-crypto price fallback |
+| 7-day (2026-04-18 → 2026-04-25) | Round 2 baseline: WR ≥68%, mean edge ≥0.04, 12–15 trades/day | Lever table in `/morning-check` |
+| Weekly (Mondays) | 7-day vs prior 7-day WR / mean edge | See §0 weekly rolling |
 
 ---
 
-## 1. Open investigations (not yet addressed)
+## 0. Active verification windows
 
-### 1b. Orderbook zero-fill persistence bug
+### 0a. Round 2 baseline (through 2026-04-25)
 
-**Finding:** Trade-replay shows `orderbook_depth_usd=0`, `spread_at_decision=0`, `vwap_price=0` stored for markets the log confirms had actual depth (CLOB HTTP 200). Data fetched but not persisted.
+Round 2 fixes (§0b token raise, §0c-1 weak-signals gate, §0c-2 similar_to extractor, §0c-3 adverse instrumentation) + Round 2 env tuning (`PRESCREEN_MAX_TOKENS=1000`, `WEAK_SIGNAL_STRENGTH_THRESHOLD=0.55`) all deployed.
 
-**Scope:** degrades `spread_aware_edge` accuracy — falls back to `market.yes_price` midpoint when orderbook columns are zero.
+**Goal:** 12–15 trades/day without WR <68% or mean edge <0.04.
 
-**Diagnostic:**
-- `src/pipelines/polymarket.py` → `get_order_book()` return path.
-- `src/db/sqlite.py` → `save_trade()` — confirm `spread_at_decision`, `orderbook_depth_usd`, `vwap_price` are extracted from the orderbook object and not left as zero default.
+**Daily:** `/morning-check` — consolidated skill (service + skip reasons + cash reconcile + today's review + alarm table with env-only levers). Drill into `/vps-health-check`, `/skip-reason-analyzer 24`, `/db-diagnostics cash-reconcile`, `/reviews/{today}` only when flagged.
 
-**Priority:** medium. Affects edge accuracy on every executed trade.
+**Weekly rolling (7d vs prior 7d):**
+- WR drop >5pp → investigate market_type breakdown in `daily_reviews`.
+- Mean edge drop >0.01 → investigate.
+- Trade count rising but WR falling → revert last lever.
+- `unrealized_adverse_triggered` counts per market_type → decide if `consecutive_loss_cooldown` needs tuning.
 
-### 1d. Learning system at prior — no resolved trades
+### 0b. Round 3 post-deploy checks (collapse once confirmed)
 
-**Finding:** all calibration buckets at Beta(1,1). `market_type_performance` + `signal_trackers` empty. 22 early-exit trades have PnL but no `actual_outcome` (correctly excluded).
+- **§1b orderbook persistence** — after first post-deploy BUY:
+  ```bash
+  ssh root@49.13.159.52 "cd /root/polymarket-v2 && sqlite3 data/predictor.db \"SELECT market_id, spread_at_decision, vwap_price, orderbook_depth_usd FROM trade_records WHERE action!='SKIP' ORDER BY timestamp DESC LIMIT 5;\""
+  ```
+  All three columns must be non-zero. If confirmed → remove this bullet.
 
-**Why:** either (a) auto-resolution job not finding settled markets and writing `actual_outcome`, or (b) all 22 positions expired worthless and `actual_outcome=0` was never recorded.
+- **§1g WS observability** — after first reconnect event:
+  ```bash
+  ssh root@49.13.159.52 "grep -cE 'ws_subscription_sent|ws_message_decode_error|ws_event_' /root/polymarket-v2/data/bot.log"
+  ```
+  Expect ≥1 `ws_subscription_sent` per reconnect. If positions are opened and WS never subscribes → investigate. Polling fallback (5min) still covers TP/SL in the meantime.
 
-**Diagnostic:**
-```bash
-ssh root@49.13.159.52 "grep 'auto_resolve\|resolution' /root/polymarket-v2/data/bot.log | tail -50"
-ssh root@49.13.159.52 "sqlite3 data/predictor.db 'SELECT record_id, market_id, resolution_datetime, exit_type, actual_outcome FROM trade_records WHERE action!=\"SKIP\" ORDER BY timestamp DESC;'"
-```
+- **§1e config canonicalization** — deploy sequence ran; redundant `.env` lines removed. No ongoing monitoring.
 
-**Priority:** high — learning system is the project's long-term edge. Without resolved trades, calibration/Brier never converges.
-
-### 1e. Config drift — decision required
-
-Two confirmed drifts between `config.py` defaults, deployed `.env`, and CLAUDE.md:
-1. `PRESCREEN_MIN_CONFIDENCE`: `config.py` default = `0.35`, `.env` = `0.25`, docs say `0.25`. Which is canonical?
-2. `EVALUATION_COOLDOWN_HOURS`: `config.py` default = `2.0`, `.env` = `4.0`, CLAUDE.md says "2h". Is 4h intentional?
-
-**Action:** user picks canonical values; update the losing side (remove `.env` override OR update default + docs).
-
-### 1g. WebSocket exit monitor reconnection
-
-**Finding:** `vps-health-check` showed `ws_exit.connected=false`. Zero open positions now → no immediate risk. But verify reconnection logic before first live position.
-
-**Diagnostic:** `src/engine/ws_exit.py` reconnection loop. Confirm `RealTimeExitManager` is started in lifespan and re-subscribes on disconnect.
-
-**Priority:** low until first live position.
+- **§2b per-type `MIN_EDGE`** — after 24h:
+  ```bash
+  ssh root@49.13.159.52 "cd /root/polymarket-v2 && sqlite3 data/predictor.db \"SELECT market_type, COUNT(*), ROUND(AVG(edge),4) FROM trade_records WHERE action!='SKIP' AND timestamp > datetime('now','-24 hours') GROUP BY market_type;\""
+  ssh root@49.13.159.52 "cd /root/polymarket-v2 && sqlite3 data/predictor.db \"SELECT market_type, COUNT(*) FROM trade_records WHERE action='SKIP' AND skip_reason LIKE 'low_edge%' AND timestamp > datetime('now','-24 hours') GROUP BY market_type;\""
+  ssh root@49.13.159.52 "grep low_edge_skip /root/polymarket-v2/data/bot.log | tail -5 | jq '{market_type, min_edge, edge}'"
+  ```
+  Expect: sports mean edge ≥ 0.05, crypto_15m ≥ 0.04, political ≥ 0.03; more `low_edge` SKIPs on sports/esports than before. If confirmed → collapse this bullet.
 
 ---
 
-## 2. Profitability Levers (wait for Round 2 baseline)
+## 1. Open investigations
+
+### 1d. Resolution coverage — 48h data review (decision by 2026-04-21)
+
+Round 3 instrumented both branches:
+- `resolution_fallback_crypto_price` — crypto_15m auto-resolves from `market.yes_price > 0.5` when past window.
+- `resolution_skipped_unresolved` — every other market_type hits `continue` with full payload logged (no `actual_outcome` written).
+
+**Decision input:** after 48h, group log counts by `market_type`:
+```bash
+ssh root@49.13.159.52 "grep resolution_skipped_unresolved /root/polymarket-v2/data/bot.log | jq -r .market_type | sort | uniq -c"
+```
+
+**Options:**
+- If most skipped trades eventually get `resolved=true` from Polymarket → leave behavior; Polymarket just lags.
+- If `resolved=false` persists long past window for political/sports → add per-market-type price fallback (separate PR, not env).
+
+**Priority:** high — learning system is the project's long-term edge. Calibration/Brier stays at prior until real resolutions flow.
+
+### 1g. WS subscription ACK (deferred — observability landed this round)
+
+Round 3 added `ws_subscription_sent` (log-only, no server ACK per spec) and structlog for all three silent-skip paths in `_handle_message()`. Reconnect loop + polling fallback unchanged.
+
+**Open only if:** malformed-event log rate spikes (schema change) or a position opens with no `ws_subscription_sent` following. Otherwise no work needed.
+
+---
+
+## 2. Profitability Levers (start after 2026-04-25)
 
 Defer until 7 days of post-Round-2 data.
 
 ### 2a. Cost
-
-- **Tighten `PRESCREEN_MIN_CONFIDENCE` 0.25 → 0.30**
-  - Prereq: 7 days of filter-rate data.
-  - Expected: ~$2/mo savings.
-- **Cheaper pre-screen-only model** (MiniMax-M2.5 for prescreen, M2.7 for full eval).
-  - Expected: $14/mo → ~$12/mo.
+- Tighten `PRESCREEN_MIN_CONFIDENCE` 0.25 → 0.30 after 7-day filter-rate baseline. Expected ~$2/mo savings.
+- Cheaper pre-screen model (MiniMax-M2.5 prescreen, M2.7 full eval). Expected $14/mo → ~$12/mo.
 
 ### 2b. Quality
-
-- **Per-market-type `MIN_EDGE`:** sports 5% (covers 2% fee), crypto_15m 4% (covers 1.56% fee), political/etc 3% (0% fee).
-- **Ensemble LLM on high-stakes trades** (position >$100): 2 calls, skip on disagreement >0.15.
-  - Expected: Brier -0.01 to -0.02, +$1-2/mo cost.
+- ~~Per-market-type `MIN_EDGE`: sports 5% (2% fee), crypto_15m 4% (1.56% fee), political/etc 3% (0% fee).~~ **Landed Round 4 (2026-04-19).** See §0b verification.
+- Ensemble LLM on positions >$100: 2 calls, skip on disagreement >0.15. Expected Brier −0.01 to −0.02, +$1–2/mo.
 
 ### 2c. Volume
+- Loosen `QUESTION_SIMILARITY_THRESHOLD` 0.60 → 0.65 only if Round 2 extractor-unification still false-positives.
+- `no_direction` follow-up — if weak-signals gate reduces it <50/24h, stop. Else investigate prompt.
 
-- **Loosen similarity threshold 0.60 → 0.65** — only if Round 2 extractor-unification leaves residual false positives.
-- **`no_direction` follow-up** — if weak-signals gate reduces it to <50/24h, stop. If not, investigate prompt.
-
-### Recommended order (after Round 2 baseline)
-
-1. Per-market-type MIN_EDGE
-2. Cost levers (prescreen confidence bump, cheaper model)
-3. Ensemble on high-stakes (needs volume baseline first)
+### Recommended order
+1. ~~Per-market-type MIN_EDGE~~ — done (Round 4).
+2. Cost levers (prescreen confidence bump, cheaper model) — waiting on 7-day filter-rate baseline.
+3. Ensemble on high-stakes — needs volume baseline first.
 
 ---
 
 ## 3. Biweekly Improvement Loop (Deferred B)
 
-~2-3 days dev. Lands after profitability tuning settled.
+~2–3 days dev. Lands after profitability tuning settled.
 
-**User preferences (unchanged):**
-- Biweekly cadence (14d)
-- Manual approval gate
-- Shadow-mode A/B (log hypothesis configs alongside real trades)
-- Structured JSON hypothesis on biweekly review + free-text daily
-
-**New DB tables:** `hypotheses`, `biweekly_reviews`.
-**CLI:** `biweekly_review`, `propose_hypothesis`, `approve_hypothesis`, `merge_hypothesis`.
-**Endpoint:** `GET /experiments/compare?a=<run>&b=<run>` — Welch's t-test + Mann-Whitney.
-**Safety:** param whitelist, rollback on 3-day `daily_loss_limit` breach.
+- Biweekly cadence (14d), manual approval gate, shadow-mode A/B.
+- New DB tables: `hypotheses`, `biweekly_reviews`.
+- CLI: `biweekly_review`, `propose_hypothesis`, `approve_hypothesis`, `merge_hypothesis`.
+- Endpoint: `GET /experiments/compare?a=<run>&b=<run>` — Welch's t-test + Mann-Whitney.
+- Safety: param whitelist, rollback on 3-day `daily_loss_limit` breach.
 
 ---
 
 ## 4. UI Dashboard (lowest priority)
 
-Visual dashboard replacing raw Datasette browsing.
-
-**Views:** live portfolio, trade history, calibration buckets, skip-reason breakdown, Brier by market_type, daily review archive.
-**Source:** read-only `data/predictor.db` + `/health` + `/reviews`.
-**Stack options:** FastAPI + Jinja + HTMX (lightweight) OR separate Next.js/SvelteKit hitting new JSON endpoints.
-**Auth:** token or IP allowlist; stays on VPS.
+Replaces raw Datasette browsing. Views: portfolio, trade history, calibration buckets, skip-reason breakdown, Brier by market_type, daily review archive. FastAPI+Jinja+HTMX OR Next.js/SvelteKit. Token/IP auth, stays on VPS.
 
 **Prereq:** §1 + §2 + §3 settled first.

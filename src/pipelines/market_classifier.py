@@ -128,3 +128,26 @@ def get_fee_rate(market_type: str, default: float = 0.02) -> float:
     taking them with underestimated costs.
     """
     return MARKET_TYPE_FEES.get(market_type, default)
+
+
+MARKET_TYPE_MIN_EDGE: dict[str, float] = {
+    "crypto_15m":  0.04,
+    "sports":      0.05,
+    "esports":     0.05,
+    "political":   0.03,
+    "geopolitical": 0.03,
+    "economic":    0.03,
+    "cultural":    0.03,
+    "regulatory":  0.03,
+    "weather":     0.03,
+}
+
+
+def get_min_edge(market_type: str, default: float = 0.03) -> float:
+    """Per-market-type MIN_EDGE threshold (post-fee). Falls back to `default` for unknown types.
+
+    Sports and esports carry higher fees (~2%), so their floor is tighter.
+    Crypto incurs ~1.56% taker fee, so its floor is slightly above the
+    zero-fee political/economic/cultural/regulatory/weather baseline.
+    """
+    return MARKET_TYPE_MIN_EDGE.get(market_type, default)
