@@ -649,7 +649,9 @@ Before calling the expensive Twitter API ($0.0075/market), a cheap LLM pre-scree
 | Enabled | `PRESCREEN_ENABLED` | `true` | Disable only for debugging |
 | Min raw edge | `PRESCREEN_MIN_EDGE` | `0.05` | \|pre_prob - market_price\| threshold — intentionally loose |
 | Min confidence | `PRESCREEN_MIN_CONFIDENCE` | `0.25` | Much lower than full eval (0.65+) — loose gate |
-| Max tokens | `PRESCREEN_MAX_TOKENS` | `500` | Keeps latency ~1s and cost ~$0.0001/call |
+| Max tokens | `PRESCREEN_MAX_TOKENS` | `500` | Keeps latency ~1s and cost ~$0.0001/call. VPS runs at 1500. |
+
+**Structured output (Round 5, 2026-04-20):** `call_prescreen()` sends `response_format={"type": "json_object"}` to MiniMax and validates the response with a `PrescreenResult` pydantic model (`estimated_probability ∈ [0,1]`, `confidence ∈ [0,1]` default 0.5, `reasoning`). A two-stage parse first tries `PrescreenResult.model_validate_json(raw)`, then falls back to the legacy `parse_json_safe()` + `PrescreenResult.model_validate()` path for responses still wrapped in `<think>…</think>` traces. Parse failures structlog `prescreen_parse_failed` with `errors` and `raw_preview` fields.
 
 **Thresholds are intentionally loose.** False negatives (filtering a real edge) are acceptable at low cost. False positives (letting through noise) cost ~$0.0075 Twitter + $0.0004 LLM — the penalty is small. Start loose, tighten based on `SELECT skip_reason, COUNT(*) FROM trade_records WHERE skip_reason LIKE 'prescreen_%'` data.
 

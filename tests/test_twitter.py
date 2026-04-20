@@ -31,23 +31,34 @@ def _make_tweet(
     engagement_score: int = 50,
     verified: bool = False,
     bio: str = "",
-    created_at: str = "2026-02-21T12:00:00Z",
+    created_at: str = "Mon Feb 21 12:00:00 +0000 2026",
 ) -> dict:
-    """Build a realistic raw tweet dict matching the Twitter API shape."""
+    """Build a raw tweet matching the current twitterapi.io shape."""
+    # Distribute engagement_score across 4 fields so _compute_engagement recovers it
+    like = engagement_score // 4
+    retweet = engagement_score // 4
+    reply = engagement_score // 4
+    quote = engagement_score - like - retweet - reply
     return {
+        "type": "tweet",
+        "id": "0",
         "text": text,
+        "likeCount": like,
+        "retweetCount": retweet,
+        "replyCount": reply,
+        "quoteCount": quote,
+        "createdAt": created_at,
+        "lang": "en",
         "author": {
-            "screen_name": screen_name,
+            "userName": screen_name,
             "name": screen_name,
-            "followers_count": followers_count,
-            "following_count": following_count,
-            "friends_count": following_count,
-            "verified": verified,
-            "bio": bio,
+            "followers": followers_count,
+            "following": following_count,
+            "isVerified": verified,
+            "isBlueVerified": False,
             "description": bio,
+            "location": "",
         },
-        "engagement_score": engagement_score,
-        "created_at": created_at,
     }
 
 
@@ -219,27 +230,27 @@ class TestIsBotAccount:
 
     def test_name_with_bot_keyword(self):
         """Screen name containing 'bot' -> True."""
-        author = {"screen_name": "news_bot_daily", "followers_count": 5000, "following_count": 100}
+        author = {"userName": "news_bot_daily", "followers": 5000, "following": 100}
         assert TwitterDataPipeline._is_bot_account(author) is True
 
     def test_name_with_autopost(self):
         """Screen name containing 'autopost' -> True."""
-        author = {"screen_name": "autopost_crypto", "followers_count": 5000, "following_count": 100}
+        author = {"userName": "autopost_crypto", "followers": 5000, "following": 100}
         assert TwitterDataPipeline._is_bot_account(author) is True
 
     def test_name_with_feed(self):
         """Screen name containing 'feed' -> True."""
-        author = {"screen_name": "cryptofeedlive", "followers_count": 5000, "following_count": 100}
+        author = {"userName": "cryptofeedlive", "followers": 5000, "following": 100}
         assert TwitterDataPipeline._is_bot_account(author) is True
 
     def test_high_following_to_follower_ratio(self):
         """following/followers > 50 -> True."""
-        author = {"screen_name": "normalname", "followers_count": 100, "following_count": 5100}
+        author = {"userName": "normalname", "followers": 100, "following": 5100}
         assert TwitterDataPipeline._is_bot_account(author) is True
 
     def test_normal_account(self):
         """Normal account with regular name and ratio -> False."""
-        author = {"screen_name": "JohnSmith", "followers_count": 10000, "following_count": 500}
+        author = {"userName": "JohnSmith", "followers": 10000, "following": 500}
         assert TwitterDataPipeline._is_bot_account(author) is False
 
     def test_empty_author_dict(self):
@@ -248,12 +259,12 @@ class TestIsBotAccount:
 
     def test_following_ratio_exactly_at_threshold(self):
         """following/followers == 50 is NOT a bot (needs > 50)."""
-        author = {"screen_name": "borderline", "followers_count": 100, "following_count": 5000}
+        author = {"userName": "borderline", "followers": 100, "following": 5000}
         assert TwitterDataPipeline._is_bot_account(author) is False
 
     def test_following_ratio_just_over_threshold(self):
         """following/followers == 50.1 is a bot."""
-        author = {"screen_name": "borderline", "followers_count": 100, "following_count": 5010}
+        author = {"userName": "borderline", "followers": 100, "following": 5010}
         assert TwitterDataPipeline._is_bot_account(author) is True
 
 
@@ -311,7 +322,7 @@ class TestDeduplication:
         ]
         result = TwitterDataPipeline._deduplicate_by_content_similarity(tweets)
         assert len(result) == 1
-        assert result[0]["author"]["screen_name"] == "B"
+        assert result[0]["author"]["userName"] == "B"
 
     @pytest.mark.asyncio
     async def test_dedup_integration_in_pipeline(self):
@@ -467,3 +478,53 @@ class TestEmptyKeywords:
 
         assert signals == []
         mock_search.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test: New date parser and engagement computation
+# ---------------------------------------------------------------------------
+
+
+class TestNewHelpers:
+    """Tests for _parse_twitter_date and _compute_engagement added in Round 6."""
+
+    def test_twitter_date_parser_handles_legacy_format(self):
+        """_parse_twitter_date parses Twitter legacy 'Mon Apr 20 17:05:24 +0000 2026' correctly."""
+        result = TwitterDataPipeline._parse_twitter_date("Mon Apr 20 17:05:24 +0000 2026")
+        assert result is not None
+        assert isinstance(result, datetime)
+        assert result.year == 2026
+        assert result.tzinfo is not None
+
+    @pytest.mark.asyncio
+    async def test_engagement_computed_from_count_fields(self):
+        """Tweet with likeCount=5, retweetCount=3, replyCount=1, quoteCount=1 (sum=10) passes filter."""
+        pipeline = _build_pipeline()
+        raw_tweet = {
+            "type": "tweet",
+            "id": "1",
+            "text": "Bitcoin breaking news right now",
+            "likeCount": 5,
+            "retweetCount": 3,
+            "replyCount": 1,
+            "quoteCount": 1,
+            "createdAt": "Mon Apr 20 17:05:24 +0000 2026",
+            "lang": "en",
+            "author": {
+                "userName": "CryptoReporter",
+                "name": "Crypto Reporter",
+                "followers": 1000,
+                "following": 200,
+                "isVerified": False,
+                "isBlueVerified": False,
+                "description": "",
+                "location": "",
+            },
+        }
+
+        with patch.object(pipeline, "_search_tweets", new_callable=AsyncMock, return_value=[raw_tweet]):
+            with patch("src.pipelines.twitter.classify_source_tier", return_value="S6"):
+                signals = await pipeline.get_signals_for_market(["Bitcoin"])
+
+        assert len(signals) == 1
+        assert signals[0].engagement == 10

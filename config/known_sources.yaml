@@ -34,6 +34,7 @@ institutional_media:
     - "@CNBC"
     - "@CoinDesk"
     - "@TheBlock__"
+    - "@guardian"
   rss_domains:
     - "bbc.com"
     - "nytimes.com"
@@ -41,6 +42,8 @@ institutional_media:
     - "cnbc.com"
     - "coindesk.com"
     - "theblock.co"
+    - "theguardian.com"
+    - "cointelegraph.com"
 
 expert_bio_keywords:
   - journalist

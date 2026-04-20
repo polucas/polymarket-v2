@@ -93,19 +93,29 @@ Morning check 2026-04-19 showed `no_direction = 182/24h`, above the Round 2 alar
 
 **Future consideration (NOT now):** If `no_direction` climbs past 300/24h, tighten `PRESCREEN_MIN_CONFIDENCE` 0.25 → 0.30 (§2a cost lever) or revise SYSTEM_PROMPT anchoring language (code change, separate PR).
 
-### 1i. Prescreen JSON parse failures — chronic malformed LLM output (diagnosed 2026-04-20)
+### 1i. Prescreen JSON parse failures — Round 5 deployed 2026-04-20
 
-Morning check 2026-04-20 flagged `prescreen_parse_failed` growth +373/11h (~815/24h extrapolated) vs old alarm threshold `>20/24h`. Drilled in — LLM returns HTTP 200 every call; parse fails on ~50% of attempt-0 calls; most recover on attempt-1 retry; rest hit `prescreen_failed_passthrough` → full eval. Zero trade impact.
+Morning check 2026-04-20 flagged `prescreen_parse_failed` growth +373/11h (~815/24h extrapolated). Root cause investigation revealed TWO bugs:
 
-Token budget NOT the cause: tested progression 500 → 1000 → 1500 with no change in failure rate. Root cause is JSON format inconsistency from MiniMax model (wrong field names, malformed structure, or trailing content).
+1. **`PRESCREEN_MAX_TOKENS` env var dead code** — `call_prescreen()` at `src/engine/grok_client.py:190` hardcoded `max_tokens=300`. All env tuning (500→1000→1500) did nothing. Doc-audit missed the drift because it only cross-references docs, not config↔code wiring.
+2. **No schema enforcement** — M2.7 `<think>` reasoning traces truncated JSON at 300-token budget.
 
-**Actions taken 2026-04-20:**
-- `PRESCREEN_MAX_TOKENS` 1000 → 1500 (insurance only, ~$2/mo cost bump).
-- Revised skill alarm threshold `>20/24h` → `>500/24h growth vs 7-day baseline` in [`.claude/skills/morning-check.md`](../../.claude/skills/morning-check.md) + memory.
+**Round 5 (commit `3f0814e`, deployed 2026-04-20 07:20 UTC):**
+- Wired `settings.PRESCREEN_MAX_TOKENS` → VPS now actually uses 1500.
+- Added `PrescreenResult` pydantic schema (estimated_probability [0,1], confidence [0,1] default 0.5, reasoning).
+- Enabled MiniMax `response_format={"type": "json_object"}` (probed + supported).
+- Two-stage parse: pydantic `model_validate_json` on raw → `parse_json_safe` + pydantic fallback for `<think>`-wrapped output.
+- `prescreen_parse_failed` structlog now includes `errors` + `raw_preview` fields.
+- Alarm threshold revised `>500/24h` → `>100/24h` in morning-check skill + memory.
 
-**Queued code PR:** add pydantic schema validation + JSON-mode enforcement in `call_prescreen()` at `src/engine/grok_client.py`. Should reduce retry overhead (~50% of prescreen calls currently make 2 LLM requests). Estimated savings: ~400 unnecessary calls/24h × $0.0001 ≈ $1.20/mo + latency reduction.
+**24h verification (by 2026-04-21 07:20 UTC):**
+```bash
+ssh root@49.13.159.52 "grep -c prescreen_parse_failed /root/polymarket-v2/data/bot.log"
+ssh root@49.13.159.52 "grep prescreen_parse_failed /root/polymarket-v2/data/bot.log | tail -5 | jq '.raw_preview'"
+```
+Expected: new-entry rate drops <100/24h. If still high, inspect `raw_preview` for schema drift from M2.7.
 
-**Priority:** low — system functions correctly via retry+passthrough. Ship with next batched code round.
+**Follow-up:** doc-audit skill wire-check pass (grep `settings.FOO` actually used in `src/`) — file under future improvements, not blocking.
 
 ---
 
