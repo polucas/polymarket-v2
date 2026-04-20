@@ -11,6 +11,7 @@ import pytest
 from src.engine.grok_client import (
     LLMClient,
     GrokClient,  # backward-compat alias
+    PrescreenResult,
     parse_json_safe,
     _validate_llm_response,
     REQUIRED_FIELDS,
@@ -50,6 +51,7 @@ def _mock_settings():
     s = MagicMock()
     s.MINIMAX_API_KEY = "test-minimax-key"
     s.LLM_MODEL = "MiniMax-M2.7"
+    s.PRESCREEN_MAX_TOKENS = 500
     return s
 
 
@@ -548,10 +550,11 @@ class TestSystemPrompt:
 
 class TestCallPrescreen:
     @pytest.mark.asyncio
-    async def test_prescreen_uses_300_max_tokens(self):
-        """Pre-screen passes max_tokens=300."""
+    async def test_prescreen_uses_settings_max_tokens(self):
+        """Pre-screen passes max_tokens from settings.PRESCREEN_MAX_TOKENS."""
         db = _mock_db()
         settings = _mock_settings()
+        settings.PRESCREEN_MAX_TOKENS = 500
         grok = LLMClient(settings, db)
 
         valid_json = json.dumps(_valid_grok_dict())
@@ -572,7 +575,7 @@ class TestCallPrescreen:
 
         assert result is not None
         call_kwargs = mock_client.post.call_args
-        assert call_kwargs.kwargs["json"]["max_tokens"] == 300
+        assert call_kwargs.kwargs["json"]["max_tokens"] == settings.PRESCREEN_MAX_TOKENS
 
     @pytest.mark.asyncio
     async def test_prescreen_single_retry_then_none(self):
@@ -629,3 +632,92 @@ class TestCallPrescreen:
         assert result is not None
         assert result["estimated_probability"] == pytest.approx(0.45)
         assert result["confidence"] == pytest.approx(0.30)
+
+    @pytest.mark.asyncio
+    async def test_prescreen_pydantic_rejects_out_of_range(self):
+        """Pydantic rejects estimated_probability > 1.0; logs prescreen_parse_failed, returns None."""
+        db = _mock_db()
+        settings = _mock_settings()
+        grok = LLMClient(settings, db)
+
+        bad_prob = json.dumps({"estimated_probability": 1.5, "confidence": 0.8, "reasoning": "x"})
+        api_resp = _make_xai_response(bad_prob)
+
+        mock_http_resp = MagicMock(spec=httpx.Response)
+        mock_http_resp.status_code = 200
+        mock_http_resp.json.return_value = api_resp
+        mock_http_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.engine.grok_client.httpx.AsyncClient", return_value=mock_client), \
+             patch("src.engine.grok_client.asyncio.sleep", new_callable=AsyncMock), \
+             patch("src.engine.grok_client.log") as mock_log:
+            result = await grok.call_prescreen("ctx", "market-bad-prob")
+
+        assert result is None
+        # prescreen_parse_failed must be logged (pydantic validation error path)
+        warning_calls = [str(c) for c in mock_log.warning.call_args_list]
+        assert any("prescreen_parse_failed" in c for c in warning_calls)
+        # 2 attempts made
+        assert mock_client.post.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_prescreen_fallback_parses_think_wrapped(self):
+        """Two-stage fallback recovers valid JSON from <think>-wrapped response."""
+        db = _mock_db()
+        settings = _mock_settings()
+        grok = LLMClient(settings, db)
+
+        think_wrapped = (
+            "<think>some reasoning trace here</think>"
+            '{"estimated_probability": 0.6, "confidence": 0.7, "reasoning": "test"}'
+        )
+        api_resp = _make_xai_response(think_wrapped)
+
+        mock_http_resp = MagicMock(spec=httpx.Response)
+        mock_http_resp.status_code = 200
+        mock_http_resp.json.return_value = api_resp
+        mock_http_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.engine.grok_client.httpx.AsyncClient", return_value=mock_client):
+            result = await grok.call_prescreen("ctx", "market-think-wrap")
+
+        assert result is not None
+        assert result["estimated_probability"] == pytest.approx(0.6)
+        assert result["confidence"] == pytest.approx(0.7)
+
+    @pytest.mark.asyncio
+    async def test_prescreen_passes_response_format(self):
+        """response_format={'type': 'json_object'} is included in the request payload."""
+        db = _mock_db()
+        settings = _mock_settings()
+        grok = LLMClient(settings, db)
+
+        valid_json = json.dumps(_valid_grok_dict())
+        api_resp = _make_xai_response(valid_json)
+
+        mock_http_resp = MagicMock(spec=httpx.Response)
+        mock_http_resp.status_code = 200
+        mock_http_resp.json.return_value = api_resp
+        mock_http_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.engine.grok_client.httpx.AsyncClient", return_value=mock_client):
+            await grok.call_prescreen("ctx", "market-rf")
+
+        call_kwargs = mock_client.post.call_args
+        payload = call_kwargs.kwargs["json"]
+        assert payload.get("response_format") == {"type": "json_object"}

@@ -7,6 +7,7 @@ from typing import Optional
 
 import httpx
 import structlog
+from pydantic import BaseModel, Field, ValidationError
 
 from src.config import Settings
 from src.db.sqlite import Database
@@ -16,6 +17,14 @@ log = structlog.get_logger()
 MINIMAX_API_BASE = "https://api.minimaxi.chat/v1"
 MAX_RETRIES = 2
 REQUIRED_FIELDS = {"estimated_probability", "confidence", "reasoning"}
+
+
+class PrescreenResult(BaseModel):
+    estimated_probability: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(default=0.50, ge=0.0, le=1.0)
+    reasoning: str = ""
+
+    model_config = {"extra": "ignore"}
 
 SYSTEM_PROMPT = """You are a prediction market analyst. Your job: estimate the true probability of market outcomes.
 
@@ -111,16 +120,30 @@ class LLMClient:
         self._api_key = settings.MINIMAX_API_KEY
         self._db = db
         self._model = settings.LLM_MODEL
+        self._settings = settings
         self._timeout = httpx.Timeout(30.0, connect=10.0)
 
     async def complete(
-        self, prompt: str, max_tokens: int = 2000, system_prompt: str = SYSTEM_PROMPT,
+        self,
+        prompt: str,
+        max_tokens: int = 2000,
+        system_prompt: str = SYSTEM_PROMPT,
+        response_format: Optional[dict] = None,
     ) -> str:
         """Raw API call to MiniMax."""
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": self._model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+        }
+        if response_format is not None:
+            payload["response_format"] = response_format
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(
@@ -129,12 +152,7 @@ class LLMClient:
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": self._model,
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": 0.1,
-                },
+                json=payload,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -184,30 +202,47 @@ class LLMClient:
         return None
 
     async def call_prescreen(self, context: str, market_id: str) -> Optional[dict]:
-        """Cheap pre-screen LLM call. 1 retry, 300 max_tokens, fail-open (None = proceed)."""
-        for attempt in range(2):  # max 2 attempts (1 retry)
+        """Cheap pre-screen LLM call. 1 retry, settings.PRESCREEN_MAX_TOKENS budget, fail-open."""
+        for attempt in range(2):
             try:
-                raw = await self.complete(context, max_tokens=300)
-                parsed = parse_json_safe(raw)
-                if parsed is None:
-                    log.warning("prescreen_parse_failed", attempt=attempt, market_id=market_id)
+                raw = await self.complete(
+                    context,
+                    max_tokens=self._settings.PRESCREEN_MAX_TOKENS,
+                    response_format={"type": "json_object"},
+                )
+                try:
+                    return PrescreenResult.model_validate_json(raw).model_dump()
+                except ValidationError:
+                    parsed = parse_json_safe(raw)
+                    if parsed is not None:
+                        try:
+                            return PrescreenResult.model_validate(parsed).model_dump()
+                        except ValidationError as ve:
+                            log.warning(
+                                "prescreen_parse_failed",
+                                attempt=attempt,
+                                market_id=market_id,
+                                errors=str(ve)[:200],
+                                raw_preview=raw[:300],
+                            )
+                    else:
+                        log.warning(
+                            "prescreen_parse_failed",
+                            attempt=attempt,
+                            market_id=market_id,
+                            errors="no_json_recovered",
+                            raw_preview=raw[:300],
+                        )
                     if attempt == 0:
                         await asyncio.sleep(1.0)
                     continue
-                validated = _validate_llm_response(parsed)
-                if validated is None:
-                    log.warning("prescreen_validation_failed", attempt=attempt, market_id=market_id)
-                    if attempt == 0:
-                        await asyncio.sleep(1.0)
-                    continue
-                return validated
             except Exception as e:
                 log.warning("prescreen_error", error=str(e), attempt=attempt, market_id=market_id)
                 if attempt == 0:
                     await asyncio.sleep(1.0)
 
         log.info("prescreen_failed_passthrough", market_id=market_id)
-        return None  # fail-open
+        return None
 
 
 # Backward-compat alias

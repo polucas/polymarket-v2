@@ -83,6 +83,30 @@ Round 3 added `ws_subscription_sent` (log-only, no server ACK per spec) and stru
 
 **Open only if:** malformed-event log rate spikes (schema change) or a position opens with no `ws_subscription_sent` following. Otherwise no work needed.
 
+### 1h. `no_direction` is LLM anchoring, not gate regression (resolved 2026-04-19)
+
+Morning check 2026-04-19 showed `no_direction = 182/24h`, above the Round 2 alarm threshold of 50. Drilled in — `WEAK_SIGNAL_STRENGTH_THRESHOLD=0.55` deployed, but `grep weak_signals data/bot.log` returned 0 matches lifetime. Gate never fires for typical S1-S5 signal mix (credibility 0.65-0.95, well above 0.55). Sampled 10 `no_direction` trade_records — every row had `grok_raw_probability == market_price_at_decision` exactly (e.g. sports 0.505/0.505/0.505, crypto 0.820/0.820/0.820), with confidence 0.25-0.52. LLM is echoing market price per `SYSTEM_PROMPT` anchoring ("markets generally efficient; current price IS consensus"). `determine_side()` returns SKIP on exact equality → `no_direction`.
+
+**Actions taken:**
+- Raised `no_direction` alarm threshold 50 → 200/24h in [`.claude/skills/morning-check.md`](../../.claude/skills/morning-check.md) + memory [`project_daily_routine.md`](../../../.claude/projects/-home-jedicelli-polymarket-v2/memory/project_daily_routine.md).
+- Documented that gate rarely applicable for current signal mix — not dead, but only trips on S6-dominated batches.
+
+**Future consideration (NOT now):** If `no_direction` climbs past 300/24h, tighten `PRESCREEN_MIN_CONFIDENCE` 0.25 → 0.30 (§2a cost lever) or revise SYSTEM_PROMPT anchoring language (code change, separate PR).
+
+### 1i. Prescreen JSON parse failures — chronic malformed LLM output (diagnosed 2026-04-20)
+
+Morning check 2026-04-20 flagged `prescreen_parse_failed` growth +373/11h (~815/24h extrapolated) vs old alarm threshold `>20/24h`. Drilled in — LLM returns HTTP 200 every call; parse fails on ~50% of attempt-0 calls; most recover on attempt-1 retry; rest hit `prescreen_failed_passthrough` → full eval. Zero trade impact.
+
+Token budget NOT the cause: tested progression 500 → 1000 → 1500 with no change in failure rate. Root cause is JSON format inconsistency from MiniMax model (wrong field names, malformed structure, or trailing content).
+
+**Actions taken 2026-04-20:**
+- `PRESCREEN_MAX_TOKENS` 1000 → 1500 (insurance only, ~$2/mo cost bump).
+- Revised skill alarm threshold `>20/24h` → `>500/24h growth vs 7-day baseline` in [`.claude/skills/morning-check.md`](../../.claude/skills/morning-check.md) + memory.
+
+**Queued code PR:** add pydantic schema validation + JSON-mode enforcement in `call_prescreen()` at `src/engine/grok_client.py`. Should reduce retry overhead (~50% of prescreen calls currently make 2 LLM requests). Estimated savings: ~400 unnecessary calls/24h × $0.0001 ≈ $1.20/mo + latency reduction.
+
+**Priority:** low — system functions correctly via retry+passthrough. Ship with next batched code round.
+
 ---
 
 ## 2. Profitability Levers (start after 2026-04-25)

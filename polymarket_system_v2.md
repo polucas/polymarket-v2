@@ -649,7 +649,7 @@ Before calling the expensive Twitter API ($0.0075/market), a cheap LLM pre-scree
 | Enabled | `PRESCREEN_ENABLED` | `true` | Disable only for debugging |
 | Min raw edge | `PRESCREEN_MIN_EDGE` | `0.05` | \|pre_prob - market_price\| threshold — intentionally loose |
 | Min confidence | `PRESCREEN_MIN_CONFIDENCE` | `0.25` | Much lower than full eval (0.65+) — loose gate |
-| Max tokens | `PRESCREEN_MAX_TOKENS` | `300` | Keeps latency ~1s and cost ~$0.0001/call |
+| Max tokens | `PRESCREEN_MAX_TOKENS` | `500` | Keeps latency ~1s and cost ~$0.0001/call |
 
 **Thresholds are intentionally loose.** False negatives (filtering a real edge) are acceptable at low cost. False positives (letting through noise) cost ~$0.0075 Twitter + $0.0004 LLM — the penalty is small. Start loose, tighten based on `SELECT skip_reason, COUNT(*) FROM trade_records WHERE skip_reason LIKE 'prescreen_%'` data.
 

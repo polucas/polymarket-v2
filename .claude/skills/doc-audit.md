@@ -1,12 +1,14 @@
 ---
 name: doc-audit
-description: Cross-reference numeric constants and feature flags across .env, src/config.py, CLAUDE.md, and polymarket_system_v2.md to flag drift.
+description: Cross-reference numeric constants and feature flags across .env, src/config.py, CLAUDE.md, polymarket_system_v2.md, and docs/NEXT_STEPS.md to flag drift.
 trigger: doc audit, audit docs, config drift, /doc-audit
 ---
 
 ## Purpose
 
-Biweekly (or pre-commit) sanity check that the four sources-of-truth agree on every load-bearing tunable. The last full alignment was commit `bdd01db`; any row flagged is a real drift to resolve before shipping config changes.
+Biweekly (or pre-commit) sanity check that the five sources-of-truth agree on every load-bearing tunable. The last full alignment was commit `bdd01db`; any row flagged is a real drift to resolve before shipping config changes.
+
+`docs/NEXT_STEPS.md` is included because monitoring tables + pending-lever sections frequently reference specific thresholds (e.g. `TIER1_MIN_EDGE=0.03`, `PRESCREEN_MIN_CONFIDENCE=0.25`), and those strings rot when the underlying default changes via `.env` tuning.
 
 ## Inputs
 
@@ -30,7 +32,12 @@ None. Runs locally in `/home/jedicelli/polymarket-v2/`.
    ```bash
    rg -n '`[A-Z_]{3,}[A-Z0-9_]*`' polymarket_system_v2.md
    ```
-5. Build one row per constant; 4 columns: `config.py default`, `.env value`, `CLAUDE.md mention`, `v2.md mention`. Flag any row where two populated cells disagree (ignore cells marked "not mentioned").
+5. Extract backticked mentions in `docs/NEXT_STEPS.md`:
+   ```bash
+   rg -n '`[A-Z_]{3,}[A-Z0-9_]*`' docs/NEXT_STEPS.md
+   ```
+   Also capture numeric thresholds in the monitoring table (row heads like `sports 0.05`, `crypto_15m 0.04`, `political/etc 0.03` for §2b per-type MIN_EDGE), since those bare numbers matter even without a backticked name.
+6. Build one row per constant; 5 columns: `config.py default`, `.env value`, `CLAUDE.md mention`, `v2.md mention`, `NEXT_STEPS.md mention`. Flag any row where two populated cells disagree (ignore cells marked "not mentioned").
 
 Mandatory constants to include (even if not drifting):
 
@@ -49,12 +56,10 @@ Single markdown table with the columns listed above. Below the table:
 - Zero matches from step 1 → "parse failure: `src/config.py` schema changed (no `Field` / annotated defaults found), update this skill's regex".
 - `.env` missing → note "no .env on dev machine; compare only 3 sources".
 - A constant is mentioned in docs but absent from `src/config.py` → flag as "stale doc reference".
+- `docs/NEXT_STEPS.md` references a threshold that conflicts with current `.env` (e.g. doc says `PRESCREEN_MIN_CONFIDENCE=0.25` but `.env` has `0.35`) → flag as "NEXT_STEPS stale — update after most recent Round tuning".
 
 ## Related
 
 - Run before any commit that touches `src/config.py`, `.env`, `CLAUDE.md`, or `polymarket_system_v2.md`.
 - `backtest-compare` — after resolving drift, validate that the chosen value still performs.
 
-## Unresolved
-
-- Prior subagent reported suspected drift: `PRESCREEN_MIN_CONFIDENCE` may be `0.35` in `config.py` vs `0.25` in `CLAUDE.md`. Verify on first invocation and either update `CLAUDE.md` or the default.

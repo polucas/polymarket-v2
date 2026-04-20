@@ -54,8 +54,8 @@ Apply these checks to step 2's output. Each alarm names its env-only rollback le
 
 | Condition | Interpretation | Lever |
 |---|---|---|
-| `no_direction > 50/24h` | Weak-signals gate regressed — verify `WEAK_SIGNAL_STRENGTH_THRESHOLD` still reads from env and is non-zero. | Code regression — investigate `src/scheduler.py:540-553`, not env. |
-| `prescreen_parse_failed` growth `> 20/24h` in bot.log | Token raise insufficient for some markets. | `PRESCREEN_MAX_TOKENS` 500 → 700 |
+| `no_direction > 200/24h` | LLM echoing market price en masse (confirmed 2026-04-19: `grok_raw_prob == market_price` exactly on samples). Not a gate regression — SYSTEM_PROMPT anchoring is deliberate. | `PRESCREEN_MIN_CONFIDENCE` 0.25 → 0.30 (cuts pre-LLM) OR revise SYSTEM_PROMPT anchoring (code change). |
+| `prescreen_parse_failed` growth `> 100/24h` in bot.log | Round 5 (2026-04-20) wires `PRESCREEN_MAX_TOKENS` env var (was dead code at hardcoded 300), adds `PrescreenResult` pydantic schema, enables MiniMax JSON-mode. Pre-Round-5 baseline ~800/24h; post-deploy expected <100/24h. | Pre-deploy: alarm expected, safe to ignore until deploy completes. Post-deploy + 24h: if still >100/24h, inspect `raw_preview` field on failure logs. Real fix already in; further drift = schema mismatch (model output drift). |
 | `similar_to_*` `> 50/24h` on any single `market_id` | Extractor unification regressed on `src/scheduler.py:474` — investigate. | Possibly raise `QUESTION_SIMILARITY_THRESHOLD` 0.60 → 0.65 if samples are true near-duplicates. |
 | `weak_signals_*` total `> 200/24h` | Gate too aggressive. | `WEAK_SIGNAL_STRENGTH_THRESHOLD` 0.45 → 0.35 |
 | `weak_signals_*` total `< 10/24h` AND `no_direction > 50/24h` | Gate too lax. | `WEAK_SIGNAL_STRENGTH_THRESHOLD` 0.45 → 0.55 |
