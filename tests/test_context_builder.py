@@ -399,7 +399,7 @@ class TestBuildPrescreenContext:
         """Pre-screen context takes no Twitter signals parameter."""
         market = _make_market()
         ctx = build_prescreen_context(market, [], _make_orderbook())
-        assert "QUICK SCREEN" in ctx
+        assert "FAST SCREEN" in ctx
         assert market.question in ctx
 
     def test_max_3_rss_signals(self):
@@ -426,3 +426,24 @@ class TestBuildPrescreenContext:
         ctx = build_prescreen_context(market, [], _make_orderbook())
         assert "999,999" not in ctx
         assert "888,888" not in ctx
+
+    def test_prescreen_context_does_not_anchor_prices_first(self):
+        """Prescreen prompt leads with question + signals, not prices."""
+        market = _make_market(yes_price=0.72)
+        signals = [_make_signal(content="Fed cuts rates 50bps", credibility=0.85)]
+        ob = _make_orderbook()
+        ctx = build_prescreen_context(market, signals, ob)
+        # Header reframes task
+        assert "independent probability" in ctx.lower()
+        assert "mispriced" not in ctx.lower()
+        # Question appears before prices
+        q_pos = ctx.find("Question:")
+        price_pos = ctx.find("YES:")
+        assert q_pos >= 0 and price_pos >= 0 and q_pos < price_pos
+        # Signals appear before prices
+        sig_pos = ctx.find("SIGNALS")
+        assert sig_pos >= 0 and sig_pos < price_pos
+        # Explicit de-anchoring instruction present
+        assert "do not anchor" in ctx.lower()
+        # Prices still present (audit requirement)
+        assert "0.7200" in ctx

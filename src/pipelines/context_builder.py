@@ -158,12 +158,18 @@ def build_prescreen_context(
         signal_lines.append(f"  {i}. [{s.source_tier}|{s.source}] {age_str}: {s.content[:150]}")
     signals_text = "\n".join(signal_lines) if signal_lines else "  No signals."
 
-    return f"""QUICK SCREEN — is this market likely mispriced?
-Question: {market.question}
-YES: {market.yes_price:.4f}, NO: {market.no_price:.4f}
-Resolution: {market.hours_to_resolution:.1f}h
-OB depth: ${ob_depth:,.0f} (skew: {ob_skew:+.2f})
+    return f"""FAST SCREEN — independent probability estimate.
 
+Question: {market.question}
+Resolution: {market.hours_to_resolution:.1f}h
+
+SIGNALS (most credible first):
 {signals_text}
+
+Estimate P(YES resolves TRUE) based on the question and signals above.
+Do NOT anchor to the market reference below — it is shown only for audit, not as input to your estimate.
+
+--- Market reference (do not use as anchor) ---
+YES: {market.yes_price:.4f}, NO: {market.no_price:.4f}, OB depth: ${ob_depth:,.0f} (skew: {ob_skew:+.2f})
 
 Return ONLY: {{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "one sentence"}}"""

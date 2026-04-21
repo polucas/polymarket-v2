@@ -17,6 +17,7 @@ from src.engine.grok_client import (
     REQUIRED_FIELDS,
     MAX_RETRIES,
     SYSTEM_PROMPT,
+    PRESCREEN_SYSTEM_PROMPT,
 )
 
 
@@ -52,6 +53,7 @@ def _mock_settings():
     s.MINIMAX_API_KEY = "test-minimax-key"
     s.LLM_MODEL = "MiniMax-M2.7"
     s.PRESCREEN_MAX_TOKENS = 500
+    s.PRESCREEN_ANCHORING_MODE = "independent"
     return s
 
 
@@ -721,3 +723,55 @@ class TestCallPrescreen:
         call_kwargs = mock_client.post.call_args
         payload = call_kwargs.kwargs["json"]
         assert payload.get("response_format") == {"type": "json_object"}
+
+    @pytest.mark.asyncio
+    async def test_prescreen_uses_independent_system_prompt(self):
+        """Prescreen call sends PRESCREEN_SYSTEM_PROMPT, not SYSTEM_PROMPT."""
+        db = _mock_db()
+        settings = _mock_settings()
+        settings.PRESCREEN_ANCHORING_MODE = "independent"
+        grok = LLMClient(settings, db)
+
+        api_resp = _make_xai_response(json.dumps({"estimated_probability": 0.6, "confidence": 0.5, "reasoning": "x"}))
+        mock_http_resp = MagicMock(spec=httpx.Response)
+        mock_http_resp.status_code = 200
+        mock_http_resp.json.return_value = api_resp
+        mock_http_resp.raise_for_status = MagicMock()
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.engine.grok_client.httpx.AsyncClient", return_value=mock_client):
+            await grok.call_prescreen("context", "mkt_1")
+
+        messages = mock_client.post.call_args.kwargs["json"]["messages"]
+        system_content = messages[0]["content"]
+        assert "independent probability" in system_content.lower()
+        assert "do not anchor" in system_content.lower()
+        assert "Markets are generally efficient" not in system_content  # NOT the full-eval prompt
+
+    @pytest.mark.asyncio
+    async def test_prescreen_anchored_mode_uses_legacy_prompt(self):
+        """PRESCREEN_ANCHORING_MODE=anchored reverts to SYSTEM_PROMPT for rollback."""
+        db = _mock_db()
+        settings = _mock_settings()
+        settings.PRESCREEN_ANCHORING_MODE = "anchored"
+        grok = LLMClient(settings, db)
+
+        api_resp = _make_xai_response(json.dumps({"estimated_probability": 0.6, "confidence": 0.5, "reasoning": "x"}))
+        mock_http_resp = MagicMock(spec=httpx.Response)
+        mock_http_resp.status_code = 200
+        mock_http_resp.json.return_value = api_resp
+        mock_http_resp.raise_for_status = MagicMock()
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.engine.grok_client.httpx.AsyncClient", return_value=mock_client):
+            await grok.call_prescreen("context", "mkt_2")
+
+        messages = mock_client.post.call_args.kwargs["json"]["messages"]
+        system_content = messages[0]["content"]
+        assert "Markets are generally efficient" in system_content  # uses full-eval SYSTEM_PROMPT

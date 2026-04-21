@@ -1,6 +1,6 @@
 # Next Steps — Polymarket v2
 
-_Last updated: 2026-04-19 after Round 4 deploy (§2b per-type `MIN_EDGE` landed). Round 2 verification window still running through 2026-04-25._
+_Last updated: 2026-04-21 after Round 6 deploy (signal pipeline repair — Twitter schema + RSS feeds) + Round 6.1 env lever (`PRESCREEN_MIN_EDGE=0.03`). Round 2 verification window still running through 2026-04-25._
 
 ## Monitoring summary (what to watch, at a glance)
 
@@ -125,7 +125,9 @@ Defer until 7 days of post-Round-2 data.
 
 ### 2a. Cost
 - Tighten `PRESCREEN_MIN_CONFIDENCE` 0.25 → 0.30 after 7-day filter-rate baseline. Expected ~$2/mo savings.
-- Cheaper pre-screen model (MiniMax-M2.5 prescreen, M2.7 full eval). Expected $14/mo → ~$12/mo.
+- **Cheaper pre-screen model** (MiniMax-M2.5 prescreen, M2.7 full eval). Expected $14/mo → ~$12/mo. Combine with raising `PRESCREEN_MIN_EDGE` 0.03 → 0.05 after cheap-model deploy (cuts more markets from Twitter+full-LLM path). Priority: high — Round 6 lever `PRESCREEN_MIN_EDGE=0.03` (Round 6.1, 2026-04-21 ~06:50 UTC) trades cost for trade volume; cheaper model inverts the tradeoff cleanly.
+  - Implementation: add `PRESCREEN_LLM_MODEL` setting in `src/config.py` (default same as `LLM_MODEL` for safety), route `call_prescreen()` in `src/engine/grok_client.py` to use it. Separate PR after 7-day stabilization.
+  - Verify: cost delta via `DAILY_API_BUDGET_USD` tracking + per-call `cost_estimate` if instrumented; baseline is ~$14/mo Round 2-era.
 
 ### 2b. Quality
 - ~~Per-market-type `MIN_EDGE`: sports 5% (2% fee), crypto_15m 4% (1.56% fee), political/etc 3% (0% fee).~~ **Landed Round 4 (2026-04-19).** See §0b verification.

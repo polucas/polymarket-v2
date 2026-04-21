@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     PRESCREEN_MIN_EDGE: float = 0.05        # raw |prob - price| gate (intentionally loose)
     PRESCREEN_MIN_CONFIDENCE: float = 0.25   # LLM confidence gate (loose — filters only very low confidence)
     PRESCREEN_MAX_TOKENS: int = 500          # small response budget
+    PRESCREEN_ANCHORING_MODE: str = "independent"  # "independent" (default) | "anchored" (rollback lever, uses full-eval SYSTEM_PROMPT)
     WEAK_SIGNAL_STRENGTH_THRESHOLD: float = 0.45  # avg credibility below this → skip before orderbook + LLM
 
     # Alerts

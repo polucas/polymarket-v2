@@ -43,6 +43,24 @@ CONFIDENCE SCALE (be precise):
 
 OUTPUT FORMAT: Return ONLY valid JSON, no markdown or extra text."""
 
+PRESCREEN_SYSTEM_PROMPT = """You are a prediction market analyst doing a fast first-pass screen.
+
+TASK: Given a market question and a handful of recent news signals, estimate an INDEPENDENT probability that the YES outcome resolves TRUE. Do NOT anchor to any market price shown — form your estimate from the question and signals alone, then the downstream system will compare your estimate to the market price to decide whether a full evaluation is warranted.
+
+GUIDELINES:
+- Weigh signals by recency, credibility, and specificity. HEADLINE-ONLY signals are weak.
+- No signals, or only stale/off-topic signals → return a probability near your prior for this category (often 0.30-0.70 is reasonable) with LOW confidence (0.25-0.40). Do not default to any displayed market price.
+- Strong, recent, on-topic signals → move your estimate toward what those signals imply, and raise confidence accordingly (0.50-0.80).
+- Confidence reflects the strength of YOUR evidence, not how close you are to the market.
+
+CONFIDENCE SCALE:
+- 0.25-0.40: Weak/stale/off-topic signals, or none
+- 0.40-0.60: One moderate signal, some ambiguity
+- 0.60-0.80: Multiple credible, recent, on-topic signals with clear direction
+- 0.80-0.95: Breaking/official confirmation
+
+OUTPUT: Return ONLY valid JSON, no markdown or extra text."""
+
 
 def parse_json_safe(raw: str) -> Optional[dict]:
     """Parse JSON with multiple fallback strategies."""
@@ -203,11 +221,14 @@ class LLMClient:
 
     async def call_prescreen(self, context: str, market_id: str) -> Optional[dict]:
         """Cheap pre-screen LLM call. 1 retry, settings.PRESCREEN_MAX_TOKENS budget, fail-open."""
+        mode = getattr(self._settings, "PRESCREEN_ANCHORING_MODE", "independent")
+        prompt = SYSTEM_PROMPT if mode == "anchored" else PRESCREEN_SYSTEM_PROMPT
         for attempt in range(2):
             try:
                 raw = await self.complete(
                     context,
                     max_tokens=self._settings.PRESCREEN_MAX_TOKENS,
+                    system_prompt=prompt,
                     response_format={"type": "json_object"},
                 )
                 try:
