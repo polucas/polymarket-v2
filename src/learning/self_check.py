@@ -240,7 +240,7 @@ async def run_daily_self_check(
     """Run the daily self-check analysis."""
     from src.learning.experiments import get_current_experiment
 
-    review_date = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%d")
+    review_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
     log.info("daily_self_check_start", review_date=review_date)
 
     # Step 1: Gather metrics
