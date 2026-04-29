@@ -41,12 +41,18 @@ None. Always scans the last 24h.
    ```
    Expected cash = `10000 − locked_position_size + resolved_pnl + early_exit_pnl`. Alarm DRIFT > $50.
 
-4. **Today's daily review** (JSON endpoint, today's date in UTC):
+4. **Label coverage** (post-Phase-1 deploy: every exited trade must have trade_profitable set):
    ```bash
-   TODAY=$(date -u +%Y-%m-%d)
-   ssh root@49.13.159.52 "curl -s http://localhost:8000/reviews/$TODAY"
+   ssh root@49.13.159.52 "cd /root/polymarket-v2 && sqlite3 data/predictor.db \"SELECT SUM(CASE WHEN trade_profitable IS NOT NULL THEN 1 ELSE 0 END) AS pnl_labeled, SUM(CASE WHEN actual_outcome IS NOT NULL THEN 1 ELSE 0 END) AS outcome_labeled, COUNT(*) AS total_non_skip FROM trade_records WHERE action != 'SKIP';\""
    ```
-   Extract `trades_executed`, `win_rate`, `mean_edge`, `mean_confidence`. If endpoint 404s (self-check hasn't run yet) → note "review not yet written today" and move on.
+   Alarm if `pnl_labeled < total_non_skip` (post-deploy should be 100%). A gap means the exit-path label write regressed.
+
+5. **Yesterday's daily review** (self-check writes PREVIOUS day's report at 06:15 UTC):
+   ```bash
+   YESTERDAY=$(date -u -d 'yesterday' +%Y-%m-%d)
+   ssh root@49.13.159.52 "curl -s http://localhost:8000/reviews/$YESTERDAY"
+   ```
+   Extract `trades_executed`, `win_rate`, `roi_pct`, `total_pnl`, `health_status`, `llm_insights` (first 200 chars), `llm_recommendations`. If endpoint 404s → note "review missing for $YESTERDAY — check daily_reviews table". Note: `win_rate` and Brier are NULL when all trades exited via TP/SL (expected — early-exit trades have no `actual_outcome`).
 
 ## Alarm thresholds (from `project_daily_routine.md`)
 
@@ -60,6 +66,7 @@ Apply these checks to step 2's output. Each alarm names its env-only rollback le
 | `weak_signals_*` total `> 200/24h` | Gate too aggressive. | `WEAK_SIGNAL_STRENGTH_THRESHOLD` 0.45 → 0.35 |
 | `weak_signals_*` total `< 10/24h` AND `no_direction > 50/24h` | Gate too lax. | `WEAK_SIGNAL_STRENGTH_THRESHOLD` 0.45 → 0.55 |
 | Cash DRIFT `> $50` | Portfolio init or early-exit crediting regressed. | Investigate, don't tune env. |
+| `pnl_labeled < total_non_skip` | Exit-path label write regressed. | Investigate ws_exit.py / resolution.py — code change, not env. |
 | `consecutive_adverse_*` `> 100/24h` sustained 48h AND `grep unrealized_adverse_triggered` shows real adverse moves | Threshold tuning discussion. | Possibly raise adverse threshold 0.10 → 0.15 in code (separate PR, not env). |
 
 ## Output format
@@ -80,7 +87,7 @@ End with a one-line verdict: `GREEN` (no alarms, cash MATCH, service active) / `
 
 - SSH unreachable → `RED — VPS unreachable`, halt.
 - Service inactive → `RED — polymarket not active`, keep pulling DB/bot.log via separate SSH attempts (they may still work).
-- `/reviews/$TODAY` 404 → not an alarm; note "review not yet written (self-check runs 15min after nightly summary)".
+- `/reviews/$YESTERDAY` 404 → check `sqlite3 daily_reviews WHERE review_date='$YESTERDAY'` directly; if also missing, log failure and move on.
 - `sqlite3` locked → retry once after 2s.
 
 ## Related

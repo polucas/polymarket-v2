@@ -1,152 +1,67 @@
 # Next Steps — Polymarket v2
 
-_Last updated: 2026-04-21 after Round 6 deploy (signal pipeline repair — Twitter schema + RSS feeds) + Round 6.1 env lever (`PRESCREEN_MIN_EDGE=0.03`). Round 2 verification window still running through 2026-04-25._
+§1j Phase 1 implementation in progress 2026-04-28.
+
+_Last updated: 2026-04-28 — Round 2 window expired, §0b/§1d/§1h/§1i removed, §1j plan written (implementing next), §2 unblocked but still waiting on §1j._
 
 ## Monitoring summary (what to watch, at a glance)
 
 | Window | Signal | Action on hit |
 |---|---|---|
 | Daily | `/morning-check` output | Named env-only lever per alarm row (see skill) |
-| 24h post-deploy | First BUY has `spread_at_decision`, `vwap_price`, `orderbook_depth_usd` all non-zero | If any zero → §1b fix regressed |
-| 24h post-deploy | First WS reconnect emits `ws_subscription_sent` | If never → §1g subscribe path broken |
-| 24h post-Round-4 | Mean executed edge by `market_type` ≥ per-type floor (sports 0.05, crypto_15m 0.04, political/etc 0.03) | If any type below floor → §2b regressed |
-| 48h (by 2026-04-21) | `resolution_skipped_unresolved` vs `resolution_fallback_crypto_price` counts by market_type | Decide §1d non-crypto price fallback |
-| 7-day (2026-04-18 → 2026-04-25) | Round 2 baseline: WR ≥68%, mean edge ≥0.04, 12–15 trades/day | Lever table in `/morning-check` |
-| Weekly (Mondays) | 7-day vs prior 7-day WR / mean edge | See §0 weekly rolling |
+| Weekly (Mondays) | 7-day vs prior 7-day trade count / PnL | WR/Brier unmeasurable until §1j lands — use PnL + trade count as proxy |
+| Ongoing | `weak_signals_*` total in `/morning-check` | Structural at 929/24h; alarm if drops below 5/day (gate broken) or no trades for 48h |
 
 ---
 
-## 0. Active verification windows
+## 1. Open — IMMEDIATE PRIORITY
 
-### 0a. Round 2 baseline (through 2026-04-25)
+### 1j. Dual-label calibration — PLAN WRITTEN, NOT IMPLEMENTED
 
-Round 2 fixes (§0b token raise, §0c-1 weak-signals gate, §0c-2 similar_to extractor, §0c-3 adverse instrumentation) + Round 2 env tuning (`PRESCREEN_MAX_TOKENS=1000`, `WEAK_SIGNAL_STRENGTH_THRESHOLD=0.55`) all deployed.
+**Problem:** 74 trades, zero calibration data. Every trade exits via WS TP/SL before natural resolution. `actual_outcome` never written. Learning system (calibration, Brier, signal tracker, adjustment pipeline) has been blind since 2026-04-16.
 
-**Goal:** 12–15 trades/day without WR <68% or mean edge <0.04.
+**Root cause confirmed (D1–D8 diagnostics 2026-04-25):**
+- `ws_exit.py` writes `exit_type`/`pnl` but not `actual_outcome`, no `on_trade_resolved()` call.
+- `get_open_trades()` filters `AND exit_type IS NULL` → TP/SL-exited trades permanently excluded from resolution scanner.
+- All calibration bucket alphas = 1.0, betas = 1.0 (initialization priors, never updated).
+- D6 Gamma API cross-check: synthetic label accuracy 50% overall (coin flip). BUY_NO+TP → 0/3 accuracy. Only BUY_YES+SL is defensible.
 
-**Daily:** `/morning-check` — consolidated skill (service + skip reasons + cash reconcile + today's review + alarm table with env-only levers). Drill into `/vps-health-check`, `/skip-reason-analyzer 24`, `/db-diagnostics cash-reconcile`, `/reviews/{today}` only when flagged.
+**Decision: dual-label approach**
+- `trade_profitable` (pnl > 0) — fast label, available on every exit, used for interim calibration/Brier.
+- `actual_outcome` — Polymarket ground truth, written by `resolution.py` when market resolves. Remove `AND exit_type IS NULL` filter so scanner continues checking post-TP/SL trades.
+- Both labels coexist. `trade_profitable` gives signal immediately; `actual_outcome` provides ground truth when available.
 
-**Weekly rolling (7d vs prior 7d):**
-- WR drop >5pp → investigate market_type breakdown in `daily_reviews`.
-- Mean edge drop >0.01 → investigate.
-- Trade count rising but WR falling → revert last lever.
-- `unrealized_adverse_triggered` counts per market_type → decide if `consecutive_loss_cooldown` needs tuning.
+**Plan:** `/home/jedicelli/.claude/plans/dual-label-calibration.md` — full Phase 1 + Phase 2 with all downstream changes (DB migration, ws_exit, resolution, sqlite, calibration, Brier, signal tracker, adjustment, self_check, alerts, datasette metadata, docs).
 
-### 0b. Round 3 post-deploy checks (collapse once confirmed)
-
-- **§1b orderbook persistence** — after first post-deploy BUY:
-  ```bash
-  ssh root@49.13.159.52 "cd /root/polymarket-v2 && sqlite3 data/predictor.db \"SELECT market_id, spread_at_decision, vwap_price, orderbook_depth_usd FROM trade_records WHERE action!='SKIP' ORDER BY timestamp DESC LIMIT 5;\""
-  ```
-  All three columns must be non-zero. If confirmed → remove this bullet.
-
-- **§1g WS observability** — after first reconnect event:
-  ```bash
-  ssh root@49.13.159.52 "grep -cE 'ws_subscription_sent|ws_message_decode_error|ws_event_' /root/polymarket-v2/data/bot.log"
-  ```
-  Expect ≥1 `ws_subscription_sent` per reconnect. If positions are opened and WS never subscribes → investigate. Polling fallback (5min) still covers TP/SL in the meantime.
-
-- **§1e config canonicalization** — deploy sequence ran; redundant `.env` lines removed. No ongoing monitoring.
-
-- **§2b per-type `MIN_EDGE`** — after 24h:
-  ```bash
-  ssh root@49.13.159.52 "cd /root/polymarket-v2 && sqlite3 data/predictor.db \"SELECT market_type, COUNT(*), ROUND(AVG(edge),4) FROM trade_records WHERE action!='SKIP' AND timestamp > datetime('now','-24 hours') GROUP BY market_type;\""
-  ssh root@49.13.159.52 "cd /root/polymarket-v2 && sqlite3 data/predictor.db \"SELECT market_type, COUNT(*) FROM trade_records WHERE action='SKIP' AND skip_reason LIKE 'low_edge%' AND timestamp > datetime('now','-24 hours') GROUP BY market_type;\""
-  ssh root@49.13.159.52 "grep low_edge_skip /root/polymarket-v2/data/bot.log | tail -5 | jq '{market_type, min_edge, edge}'"
-  ```
-  Expect: sports mean edge ≥ 0.05, crypto_15m ≥ 0.04, political ≥ 0.03; more `low_edge` SKIPs on sports/esports than before. If confirmed → collapse this bullet.
+**Next action:** implement Phase 1 (schema + exit writes + filter removal + pnl-based metrics). No env changes needed.
 
 ---
 
-## 1. Open investigations
-
-### 1d. Resolution coverage — 48h data review (decision by 2026-04-21)
-
-Round 3 instrumented both branches:
-- `resolution_fallback_crypto_price` — crypto_15m auto-resolves from `market.yes_price > 0.5` when past window.
-- `resolution_skipped_unresolved` — every other market_type hits `continue` with full payload logged (no `actual_outcome` written).
-
-**Decision input:** after 48h, group log counts by `market_type`:
-```bash
-ssh root@49.13.159.52 "grep resolution_skipped_unresolved /root/polymarket-v2/data/bot.log | jq -r .market_type | sort | uniq -c"
-```
-
-**Options:**
-- If most skipped trades eventually get `resolved=true` from Polymarket → leave behavior; Polymarket just lags.
-- If `resolved=false` persists long past window for political/sports → add per-market-type price fallback (separate PR, not env).
-
-**Priority:** high — learning system is the project's long-term edge. Calibration/Brier stays at prior until real resolutions flow.
-
-### 1g. WS subscription ACK (deferred — observability landed this round)
-
-Round 3 added `ws_subscription_sent` (log-only, no server ACK per spec) and structlog for all three silent-skip paths in `_handle_message()`. Reconnect loop + polling fallback unchanged.
-
-**Open only if:** malformed-event log rate spikes (schema change) or a position opens with no `ws_subscription_sent` following. Otherwise no work needed.
-
-### 1h. `no_direction` is LLM anchoring, not gate regression (resolved 2026-04-19)
-
-Morning check 2026-04-19 showed `no_direction = 182/24h`, above the Round 2 alarm threshold of 50. Drilled in — `WEAK_SIGNAL_STRENGTH_THRESHOLD=0.55` deployed, but `grep weak_signals data/bot.log` returned 0 matches lifetime. Gate never fires for typical S1-S5 signal mix (credibility 0.65-0.95, well above 0.55). Sampled 10 `no_direction` trade_records — every row had `grok_raw_probability == market_price_at_decision` exactly (e.g. sports 0.505/0.505/0.505, crypto 0.820/0.820/0.820), with confidence 0.25-0.52. LLM is echoing market price per `SYSTEM_PROMPT` anchoring ("markets generally efficient; current price IS consensus"). `determine_side()` returns SKIP on exact equality → `no_direction`.
-
-**Actions taken:**
-- Raised `no_direction` alarm threshold 50 → 200/24h in [`.claude/skills/morning-check.md`](../../.claude/skills/morning-check.md) + memory [`project_daily_routine.md`](../../../.claude/projects/-home-jedicelli-polymarket-v2/memory/project_daily_routine.md).
-- Documented that gate rarely applicable for current signal mix — not dead, but only trips on S6-dominated batches.
-
-**Future consideration (NOT now):** If `no_direction` climbs past 300/24h, tighten `PRESCREEN_MIN_CONFIDENCE` 0.25 → 0.30 (§2a cost lever) or revise SYSTEM_PROMPT anchoring language (code change, separate PR).
-
-### 1i. Prescreen JSON parse failures — Round 5 deployed 2026-04-20
-
-Morning check 2026-04-20 flagged `prescreen_parse_failed` growth +373/11h (~815/24h extrapolated). Root cause investigation revealed TWO bugs:
-
-1. **`PRESCREEN_MAX_TOKENS` env var dead code** — `call_prescreen()` at `src/engine/grok_client.py:190` hardcoded `max_tokens=300`. All env tuning (500→1000→1500) did nothing. Doc-audit missed the drift because it only cross-references docs, not config↔code wiring.
-2. **No schema enforcement** — M2.7 `<think>` reasoning traces truncated JSON at 300-token budget.
-
-**Round 5 (commit `3f0814e`, deployed 2026-04-20 07:20 UTC):**
-- Wired `settings.PRESCREEN_MAX_TOKENS` → VPS now actually uses 1500.
-- Added `PrescreenResult` pydantic schema (estimated_probability [0,1], confidence [0,1] default 0.5, reasoning).
-- Enabled MiniMax `response_format={"type": "json_object"}` (probed + supported).
-- Two-stage parse: pydantic `model_validate_json` on raw → `parse_json_safe` + pydantic fallback for `<think>`-wrapped output.
-- `prescreen_parse_failed` structlog now includes `errors` + `raw_preview` fields.
-- Alarm threshold revised `>500/24h` → `>100/24h` in morning-check skill + memory.
-
-**24h verification (by 2026-04-21 07:20 UTC):**
-```bash
-ssh root@49.13.159.52 "grep -c prescreen_parse_failed /root/polymarket-v2/data/bot.log"
-ssh root@49.13.159.52 "grep prescreen_parse_failed /root/polymarket-v2/data/bot.log | tail -5 | jq '.raw_preview'"
-```
-Expected: new-entry rate drops <100/24h. If still high, inspect `raw_preview` for schema drift from M2.7.
-
-**Follow-up:** doc-audit skill wire-check pass (grep `settings.FOO` actually used in `src/`) — file under future improvements, not blocking.
-
----
-
-## 2. Profitability Levers (start after 2026-04-25)
-
-Defer until 7 days of post-Round-2 data.
+## 2. Profitability Levers (unblocked since 2026-04-25, but §1j still first)
 
 ### 2a. Cost
-- Tighten `PRESCREEN_MIN_CONFIDENCE` 0.25 → 0.30 after 7-day filter-rate baseline. Expected ~$2/mo savings.
-- **Cheaper pre-screen model** (MiniMax-M2.5 prescreen, M2.7 full eval). Expected $14/mo → ~$12/mo. Combine with raising `PRESCREEN_MIN_EDGE` 0.03 → 0.05 after cheap-model deploy (cuts more markets from Twitter+full-LLM path). Priority: high — Round 6 lever `PRESCREEN_MIN_EDGE=0.03` (Round 6.1, 2026-04-21 ~06:50 UTC) trades cost for trade volume; cheaper model inverts the tradeoff cleanly.
-  - Implementation: add `PRESCREEN_LLM_MODEL` setting in `src/config.py` (default same as `LLM_MODEL` for safety), route `call_prescreen()` in `src/engine/grok_client.py` to use it. Separate PR after 7-day stabilization.
-  - Verify: cost delta via `DAILY_API_BUDGET_USD` tracking + per-call `cost_estimate` if instrumented; baseline is ~$14/mo Round 2-era.
+- Tighten `PRESCREEN_MIN_CONFIDENCE` 0.25 → 0.30. Expected ~$2/mo savings.
+- **Cheaper pre-screen model** (MiniMax-M2.5 prescreen, M2.7 full eval). Expected $14/mo → ~$12/mo. Combine with raising `PRESCREEN_MIN_EDGE` 0.03 → 0.05.
+  - Implementation: add `PRESCREEN_LLM_MODEL` setting in `src/config.py`, route `call_prescreen()` in `grok_client.py` to use it.
 
 ### 2b. Quality
-- ~~Per-market-type `MIN_EDGE`: sports 5% (2% fee), crypto_15m 4% (1.56% fee), political/etc 3% (0% fee).~~ **Landed Round 4 (2026-04-19).** See §0b verification.
-- Ensemble LLM on positions >$100: 2 calls, skip on disagreement >0.15. Expected Brier −0.01 to −0.02, +$1–2/mo.
+- ~~Per-market-type `MIN_EDGE`~~ — **done Round 4 (2026-04-19)**, confirmed 2026-04-24.
+- Ensemble LLM on positions >$100: 2 calls, skip on disagreement >0.15. Needs calibration data first (§1j).
 
 ### 2c. Volume
-- Loosen `QUESTION_SIMILARITY_THRESHOLD` 0.60 → 0.65 only if Round 2 extractor-unification still false-positives.
-- `no_direction` follow-up — if weak-signals gate reduces it <50/24h, stop. Else investigate prompt.
+- Loosen `QUESTION_SIMILARITY_THRESHOLD` 0.60 → 0.65 if false-positives confirmed by skip-reason samples.
 
 ### Recommended order
-1. ~~Per-market-type MIN_EDGE~~ — done (Round 4).
-2. Cost levers (prescreen confidence bump, cheaper model) — waiting on 7-day filter-rate baseline.
-3. Ensemble on high-stakes — needs volume baseline first.
+1. ~~Per-market-type MIN_EDGE~~ — done.
+2. **§1j dual-label calibration** — implement now. Blocking all learning.
+3. Cost levers (§2a) — after §1j deployed and 3-day signal confirmed.
+4. Ensemble on high-stakes (§2b) — needs calibration data accumulating first.
 
 ---
 
-## 3. Biweekly Improvement Loop (Deferred B)
+## 3. Biweekly Improvement Loop (Deferred)
 
-~2–3 days dev. Lands after profitability tuning settled.
+~2–3 days dev. Lands after §1j + §2 settled.
 
 - Biweekly cadence (14d), manual approval gate, shadow-mode A/B.
 - New DB tables: `hypotheses`, `biweekly_reviews`.
@@ -160,4 +75,4 @@ Defer until 7 days of post-Round-2 data.
 
 Replaces raw Datasette browsing. Views: portfolio, trade history, calibration buckets, skip-reason breakdown, Brier by market_type, daily review archive. FastAPI+Jinja+HTMX OR Next.js/SvelteKit. Token/IP auth, stays on VPS.
 
-**Prereq:** §1 + §2 + §3 settled first.
+**Prereq:** §1j + §2 + §3 settled first.

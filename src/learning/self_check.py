@@ -70,6 +70,21 @@ async def _gather_metrics(db: Database, review_date: str) -> dict:
     if total_resolved and total_resolved > 0:
         win_rate = stats["wins"] / total_resolved
 
+    # PnL-based metrics (fast loop — trade_profitable set on every exit)
+    cursor = await db._conn.execute(
+        "SELECT COUNT(*), SUM(pnl_brier_raw), SUM(pnl_brier_adjusted), "
+        "SUM(CASE WHEN trade_profitable = 1 THEN 1 ELSE 0 END) "
+        "FROM trade_records "
+        "WHERE date(timestamp) = ? AND action != 'SKIP' "
+        "AND trade_profitable IS NOT NULL AND voided = FALSE",
+        (review_date,),
+    )
+    pnl_row = await cursor.fetchone()
+    pnl_resolved_count = pnl_row[0] or 0
+    avg_pnl_brier_raw = (pnl_row[1] / pnl_resolved_count) if pnl_resolved_count > 0 and pnl_row[1] is not None else None
+    avg_pnl_brier_adjusted = (pnl_row[2] / pnl_resolved_count) if pnl_resolved_count > 0 and pnl_row[2] is not None else None
+    win_rate_pnl = (pnl_row[3] / pnl_resolved_count) if pnl_resolved_count > 0 and pnl_row[3] is not None else None
+
     # ROI — total PnL / total amount invested
     total_invested = 0.0
     cursor = await db._conn.execute(
@@ -90,6 +105,10 @@ async def _gather_metrics(db: Database, review_date: str) -> dict:
         "brier_by_market_type": brier_by_type,
         "top_performing_types": top_types,
         "worst_performing_types": worst_types,
+        "win_rate_pnl": win_rate_pnl,
+        "avg_pnl_brier_raw": avg_pnl_brier_raw,
+        "avg_pnl_brier_adjusted": avg_pnl_brier_adjusted,
+        "pnl_resolved_count": pnl_resolved_count,
     }
 
 
@@ -166,6 +185,14 @@ def _write_markdown(review: DailyReview) -> None:
         f"| ROI | {f'{review.roi_pct:.1f}%' if review.roi_pct is not None else 'N/A'} |",
         f"| Avg Brier (raw) | {f'{review.avg_brier_raw:.3f}' if review.avg_brier_raw is not None else 'N/A'} |",
         f"| Avg Brier (adjusted) | {f'{review.avg_brier_adjusted:.3f}' if review.avg_brier_adjusted is not None else 'N/A'} |",
+        "",
+        "## PnL-based metrics",
+        "| Metric | Value |",
+        "|--------|-------|",
+        f"| PnL-labeled trades | {review.pnl_resolved_count} |",
+        f"| Win rate (pnl) | {f'{review.win_rate_pnl:.1%}' if review.win_rate_pnl is not None else 'N/A'} |",
+        f"| Avg PnL Brier (raw) | {f'{review.avg_pnl_brier_raw:.3f}' if review.avg_pnl_brier_raw is not None else 'N/A'} |",
+        f"| Avg PnL Brier (adjusted) | {f'{review.avg_pnl_brier_adjusted:.3f}' if review.avg_pnl_brier_adjusted is not None else 'N/A'} |",
         "",
     ]
 
@@ -311,6 +338,10 @@ async def run_daily_self_check(
         llm_recommendations=llm_recommendations,
         health_status=health_status,
         experiment_run=experiment_run,
+        win_rate_pnl=metrics.get("win_rate_pnl"),
+        avg_pnl_brier_raw=metrics.get("avg_pnl_brier_raw"),
+        avg_pnl_brier_adjusted=metrics.get("avg_pnl_brier_adjusted"),
+        pnl_resolved_count=metrics.get("pnl_resolved_count", 0),
     )
 
     # Step 7: Persist

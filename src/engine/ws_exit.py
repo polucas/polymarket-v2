@@ -238,6 +238,18 @@ class RealTimeExitManager:
             trade.exit_price = best_bid
             trade.pnl = pnl
             trade.resolved_at = datetime.now(timezone.utc)
+            # Dual-label: write pnl-based label immediately on exit
+            trade.trade_profitable = 1 if trade.pnl > 0 else 0
+            predicted_raw = (
+                trade.grok_raw_probability if trade.action == "BUY_YES"
+                else 1 - trade.grok_raw_probability
+            )
+            trade.pnl_brier_raw = (predicted_raw - trade.trade_profitable) ** 2
+            predicted_adj = (
+                trade.final_adjusted_probability if trade.action == "BUY_YES"
+                else 1 - trade.final_adjusted_probability
+            )
+            trade.pnl_brier_adjusted = (predicted_adj - trade.trade_profitable) ** 2
             await self.db.update_trade(trade)
 
             # Update portfolio

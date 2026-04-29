@@ -15,6 +15,7 @@ from src.engine.resolution import (
     calculate_pnl,
     calculate_hypothetical_pnl,
     auto_resolve_trades,
+    check_early_exits,
     update_unrealized_adverse_moves,
 )
 from src.models import Portfolio, Position, TradeRecord
@@ -558,3 +559,190 @@ class TestResolutionFallbackCryptoPriceLog:
 
         assert trade.actual_outcome is True
         mock_db.update_trade.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Dual-label tests: check_early_exits writes trade_profitable + pnl_brier_*
+# ---------------------------------------------------------------------------
+
+
+def _make_settings_mock(take_profit=0.20, stop_loss=-0.15, enabled=True):
+    s = MagicMock()
+    s.EARLY_EXIT_ENABLED = enabled
+    s.TAKE_PROFIT_ROI = take_profit
+    s.STOP_LOSS_ROI = stop_loss
+    return s
+
+
+class TestCheckEarlyExitsDualLabel:
+    """check_early_exits writes trade_profitable and pnl Brier scores on exit."""
+
+    @pytest.mark.asyncio
+    async def test_check_early_exits_writes_trade_profitable_tp(self):
+        """TP threshold crossed -> trade_profitable=1, pnl_brier_raw/adjusted set."""
+        # entry 0.50, current 0.65 → ROI ~30% → TP
+        trade = _make_record(
+            action="BUY_YES",
+            market_price_at_decision=0.50,
+            position_size_usd=100.0,
+            grok_raw_probability=0.70,
+            final_adjusted_probability=0.68,
+            fee_rate=0.0,
+            actual_outcome=None,
+            pnl=None,
+        )
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+        mock_db.load_portfolio.return_value = Portfolio(
+            cash_balance=9900.0, total_equity=10000.0, peak_equity=10000.0
+        )
+
+        mock_market = SimpleNamespace(resolved=False, resolution=None, yes_price=0.65)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        settings = _make_settings_mock()
+
+        await check_early_exits(mock_db, mock_client, settings)
+
+        mock_db.update_trade.assert_awaited_once()
+        assert trade.exit_type == "take_profit"
+        assert trade.pnl > 0
+        assert trade.trade_profitable == 1
+        assert trade.pnl_brier_raw is not None
+        assert trade.pnl_brier_adjusted is not None
+        assert 0.0 <= trade.pnl_brier_raw <= 1.0
+        assert 0.0 <= trade.pnl_brier_adjusted <= 1.0
+        # actual_outcome must NOT be set (event hasn't resolved)
+        assert trade.actual_outcome is None
+
+    @pytest.mark.asyncio
+    async def test_check_early_exits_writes_trade_profitable_sl(self):
+        """SL threshold crossed -> trade_profitable=0, pnl_brier_raw/adjusted set."""
+        # entry 0.50, current 0.40 → ROI -20% → SL
+        trade = _make_record(
+            action="BUY_YES",
+            market_price_at_decision=0.50,
+            position_size_usd=100.0,
+            grok_raw_probability=0.70,
+            final_adjusted_probability=0.68,
+            fee_rate=0.0,
+            actual_outcome=None,
+            pnl=None,
+        )
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+        mock_db.load_portfolio.return_value = Portfolio(
+            cash_balance=9900.0, total_equity=10000.0, peak_equity=10000.0
+        )
+
+        mock_market = SimpleNamespace(resolved=False, resolution=None, yes_price=0.40)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        settings = _make_settings_mock()
+
+        await check_early_exits(mock_db, mock_client, settings)
+
+        mock_db.update_trade.assert_awaited_once()
+        assert trade.exit_type == "stop_loss"
+        assert trade.pnl < 0
+        assert trade.trade_profitable == 0
+        assert trade.pnl_brier_raw is not None
+        assert trade.pnl_brier_adjusted is not None
+        assert 0.0 <= trade.pnl_brier_raw <= 1.0
+        assert 0.0 <= trade.pnl_brier_adjusted <= 1.0
+        assert trade.actual_outcome is None
+
+
+class TestAutoResolveDualLabel:
+    """auto_resolve_trades writes trade_profitable + pnl Brier scores on natural resolution."""
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_writes_trade_profitable(self):
+        """Naturally resolved trade gets trade_profitable from pnl sign, plus pnl_brier_*."""
+        trade = _make_record(
+            action="BUY_YES",
+            market_type="political",
+            grok_raw_probability=0.75,
+            final_adjusted_probability=0.73,
+            market_price_at_decision=0.60,
+            position_size_usd=200.0,
+            fee_rate=0.02,
+            actual_outcome=None,
+            pnl=None,
+        )
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+        mock_db.load_portfolio.return_value = Portfolio(
+            cash_balance=4800.0,
+            total_equity=5000.0,
+            peak_equity=5000.0,
+            open_positions=[Position(
+                market_id="mkt-001",
+                side="BUY_YES",
+                entry_price=0.60,
+                size_usd=200.0,
+                current_value=200.0,
+            )],
+        )
+
+        # Market resolved YES → pnl > 0 → trade_profitable=1
+        mock_market = SimpleNamespace(resolved=True, resolution="YES", yes_price=1.0)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        await auto_resolve_trades(mock_db, mock_client)
+
+        mock_db.update_trade.assert_awaited_once()
+        assert trade.actual_outcome is True
+        assert trade.pnl is not None
+        assert trade.pnl > 0
+        assert trade.trade_profitable == 1
+        assert trade.pnl_brier_raw is not None
+        assert trade.pnl_brier_adjusted is not None
+        assert 0.0 <= trade.pnl_brier_raw <= 1.0
+        assert 0.0 <= trade.pnl_brier_adjusted <= 1.0
+        # Legacy brier scores also set
+        assert trade.brier_score_raw is not None
+        assert trade.brier_score_adjusted is not None
+
+
+class TestNaturalResolutionAfterTpExit:
+    """After TP/SL exit, auto_resolve_trades can still write actual_outcome."""
+
+    @pytest.mark.asyncio
+    async def test_natural_resolution_after_tp_exit(self):
+        """A trade with exit_type='take_profit' and actual_outcome=NULL is returned
+        by get_open_trades (filter removal) and auto_resolve can set actual_outcome."""
+        trade = _make_record(
+            action="BUY_YES",
+            market_type="political",
+            grok_raw_probability=0.75,
+            final_adjusted_probability=0.73,
+            market_price_at_decision=0.60,
+            position_size_usd=100.0,
+            fee_rate=0.0,
+            actual_outcome=None,
+            pnl=15.0,      # already has pnl from TP exit
+        )
+        trade.exit_type = "take_profit"
+        trade.exit_price = 0.65
+
+        mock_db = AsyncMock()
+        # Filter removal: get_open_trades now returns exited trades without actual_outcome
+        mock_db.get_open_trades.return_value = [trade]
+        mock_db.load_portfolio.return_value = Portfolio()
+
+        # Market has now resolved YES
+        mock_market = SimpleNamespace(resolved=True, resolution="YES", yes_price=1.0)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        await auto_resolve_trades(mock_db, mock_client)
+
+        mock_db.update_trade.assert_awaited_once()
+        assert trade.actual_outcome is True

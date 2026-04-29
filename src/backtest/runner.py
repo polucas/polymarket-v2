@@ -146,6 +146,19 @@ class BacktestRunner:
         brier_raw = sum(t.brier_score_raw or 0 for t in resolved) / len(resolved) if resolved else None
         brier_adj = sum(t.brier_score_adjusted or 0 for t in resolved) / len(resolved) if resolved else None
 
+        # PnL-based metrics (dual-label)
+        pnl_labeled = [t for t in executed if t.trade_profitable is not None]
+        pnl_wins = [t for t in pnl_labeled if t.trade_profitable == 1]
+        pnl_win_rate = len(pnl_wins) / len(pnl_labeled) if pnl_labeled else 0.0
+        avg_pnl_brier_raw = (
+            sum(t.pnl_brier_raw or 0 for t in pnl_labeled) / len(pnl_labeled)
+            if pnl_labeled else None
+        )
+        avg_pnl_brier_adjusted = (
+            sum(t.pnl_brier_adjusted or 0 for t in pnl_labeled) / len(pnl_labeled)
+            if pnl_labeled else None
+        )
+
         # Per market type
         by_type: dict = {}
         for t in resolved:
@@ -169,6 +182,10 @@ class BacktestRunner:
             "total_pnl": total_pnl,
             "brier_raw": brier_raw,
             "brier_adjusted": brier_adj,
+            "pnl_labeled": len(pnl_labeled),
+            "pnl_win_rate": pnl_win_rate,
+            "avg_pnl_brier_raw": avg_pnl_brier_raw,
+            "avg_pnl_brier_adjusted": avg_pnl_brier_adjusted,
             "by_market_type": by_type,
             "grok_cache": cache_stats,
         }
@@ -178,6 +195,11 @@ class BacktestRunner:
         print(f"Trades executed: {s['trades_executed']:>5}   Win rate: {s['win_rate']:.1%}   Total PnL: ${s['total_pnl']:+.2f}")
         if s['brier_raw'] is not None:
             print(f"Brier raw: {s['brier_raw']:.3f}   Brier adjusted: {s['brier_adjusted']:.3f}")
+        if s['pnl_labeled'] > 0:
+            pnl_br = s['avg_pnl_brier_raw']
+            pnl_ba = s['avg_pnl_brier_adjusted']
+            print(f"PnL-labeled: {s['pnl_labeled']}   PnL win rate: {s['pnl_win_rate']:.1%}   "
+                  f"PnL Brier raw: {pnl_br:.3f}   PnL Brier adj: {pnl_ba:.3f}")
         print("By market type:")
         for mt, v in s["by_market_type"].items():
             wr = v["wins"] / v["trades"] if v["trades"] else 0

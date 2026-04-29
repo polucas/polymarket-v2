@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import aiosqlite
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 MIGRATIONS: dict[int, list[str]] = {
     1: [
@@ -195,6 +195,20 @@ MIGRATIONS: dict[int, list[str]] = {
     6: [
         "ALTER TABLE trade_records ADD COLUMN clob_token_id_yes TEXT DEFAULT ''",
         "ALTER TABLE trade_records ADD COLUMN clob_token_id_no TEXT DEFAULT ''",
+    ],
+    7: [
+        "ALTER TABLE trade_records ADD COLUMN trade_profitable INTEGER DEFAULT NULL",
+        "ALTER TABLE trade_records ADD COLUMN pnl_brier_raw REAL DEFAULT NULL",
+        "ALTER TABLE trade_records ADD COLUMN pnl_brier_adjusted REAL DEFAULT NULL",
+        # Backfill trade_profitable for existing exited trades from pnl sign
+        """UPDATE trade_records
+           SET trade_profitable = CASE WHEN pnl > 0 THEN 1 WHEN pnl <= 0 THEN 0 END
+           WHERE action != 'SKIP' AND exit_type IS NOT NULL AND pnl IS NOT NULL""",
+        # Add pnl-based metrics columns to daily_reviews
+        "ALTER TABLE daily_reviews ADD COLUMN win_rate_pnl REAL DEFAULT NULL",
+        "ALTER TABLE daily_reviews ADD COLUMN avg_pnl_brier_raw REAL DEFAULT NULL",
+        "ALTER TABLE daily_reviews ADD COLUMN avg_pnl_brier_adjusted REAL DEFAULT NULL",
+        "ALTER TABLE daily_reviews ADD COLUMN pnl_resolved_count INTEGER DEFAULT 0",
     ],
 }
 

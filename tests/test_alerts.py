@@ -174,11 +174,46 @@ class TestFormatDailySummary:
         result = format_daily_summary(trades, portfolio)
         assert "Executed: 2" in result
         assert "Skipped: 1" in result
-        assert "Resolved: 2" in result
+        # A1-impl renamed "Resolved:" to "Outcome-resolved:" in the dual-label update
+        assert "Outcome-resolved: 2" in result
         # total_pnl = 50 + (-20) = 30
         assert "+30.00" in result
         assert "5,030.00" in result
         assert "4,800.00" in result
+
+    def test_daily_summary_reports_labeled_count(self):
+        """format_daily_summary shows 'Labeled' count (dual-label) and 'Outcome-resolved' separately.
+
+        Scenario:
+        - trade1: actual_outcome set, trade_profitable set  -> labeled=True, outcome_resolved=True
+        - trade2: trade_profitable set only (TP/SL exit)   -> labeled=True, outcome_resolved=False
+        - trade3: trade_profitable set only (SL exit)      -> labeled=True, outcome_resolved=False
+        - trade4: actual_outcome set, no trade_profitable  -> labeled=True, outcome_resolved=True
+        - trade5: neither set (open trade)                 -> labeled=False, outcome_resolved=False
+        => Labeled: 4, Outcome-resolved: 2
+        """
+        trade1 = _make_trade(action="BUY_YES", actual_outcome=True, pnl=50.0,
+                             trade_profitable=1)
+        trade2 = _make_trade(action="BUY_YES", actual_outcome=None, pnl=20.0,
+                             trade_profitable=1)
+        trade3 = _make_trade(action="BUY_YES", actual_outcome=None, pnl=-5.0,
+                             trade_profitable=0)
+        trade4 = _make_trade(action="BUY_YES", actual_outcome=False, pnl=-30.0,
+                             trade_profitable=None)
+        trade5 = _make_trade(action="BUY_YES", actual_outcome=None, pnl=None,
+                             trade_profitable=None)
+        portfolio = Portfolio(
+            cash_balance=5000.0,
+            total_equity=5000.0,
+            open_positions=[],
+        )
+        result = format_daily_summary(
+            [trade1, trade2, trade3, trade4, trade5], portfolio
+        )
+        assert "Labeled: 4" in result
+        assert "Outcome-resolved: 2" in result
+        # PnL = 50 + 20 + (-5) + (-30) = 35 (sum over labeled trades with pnl set)
+        assert "+35.00" in result
 
 
 # ---------------------------------------------------------------------------

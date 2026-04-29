@@ -266,6 +266,10 @@ def _review_to_dict(review) -> dict:
         "llm_recommendations": review.llm_recommendations,
         "health_status": review.health_status,
         "experiment_run": review.experiment_run,
+        "win_rate_pnl": review.win_rate_pnl,
+        "avg_pnl_brier_raw": review.avg_pnl_brier_raw,
+        "avg_pnl_brier_adjusted": review.avg_pnl_brier_adjusted,
+        "pnl_resolved_count": review.pnl_resolved_count,
     }
 
 

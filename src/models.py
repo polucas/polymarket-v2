@@ -204,6 +204,10 @@ class TradeRecord:
     clob_token_id_yes: str = ""
     clob_token_id_no: str = ""
 
+    trade_profitable: Optional[int] = None
+    pnl_brier_raw: Optional[float] = None
+    pnl_brier_adjusted: Optional[float] = None
+
     voided: bool = False
     void_reason: Optional[str] = None
 
@@ -383,3 +387,7 @@ class DailyReview:
     llm_recommendations: List[str] = field(default_factory=list)
     health_status: str = "UNKNOWN"
     experiment_run: str = ""
+    win_rate_pnl: Optional[float] = None
+    avg_pnl_brier_raw: Optional[float] = None
+    avg_pnl_brier_adjusted: Optional[float] = None
+    pnl_resolved_count: int = 0

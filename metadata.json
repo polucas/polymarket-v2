@@ -30,9 +30,17 @@
           "title": "Top 10 Losses",
           "sql": "SELECT timestamp, SUBSTR(market_question, 1, 80) as question, action, ROUND(market_price_at_decision, 4) as entry_price, ROUND(exit_price, 4) as exit_price, ROUND(position_size_usd, 2) as size_usd, ROUND(pnl, 2) as pnl, exit_type FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO') AND pnl < 0 ORDER BY pnl ASC LIMIT 10"
         },
-        "active_positions": {
-          "title": "Active Positions (Open Trades)",
+        "truly_open_positions": {
+          "title": "Truly Open Positions (no exit, no resolution)",
           "sql": "SELECT timestamp, SUBSTR(market_question, 1, 80) as question, action, market_type, ROUND(market_price_at_decision, 4) as entry_price, ROUND(position_size_usd, 2) as size_usd, ROUND(calculated_edge, 4) as edge, datetime(resolution_datetime) as resolves_at FROM trade_records WHERE action IN ('BUY_YES', 'BUY_NO') AND exit_type IS NULL AND actual_outcome IS NULL ORDER BY timestamp DESC"
+        },
+        "exited_pending_resolution": {
+          "title": "Exited (TP/SL), Pending Natural Resolution",
+          "sql": "SELECT timestamp, SUBSTR(market_question, 1, 80) as question, action, exit_type, ROUND(pnl, 2) as pnl, datetime(resolution_datetime) as resolves_at FROM trade_records WHERE action != 'SKIP' AND exit_type IS NOT NULL AND actual_outcome IS NULL ORDER BY timestamp DESC"
+        },
+        "label_coverage": {
+          "title": "Label Coverage (pnl vs outcome)",
+          "sql": "SELECT COUNT(*) AS total_non_skip, SUM(CASE WHEN trade_profitable IS NOT NULL THEN 1 ELSE 0 END) AS pnl_labeled, SUM(CASE WHEN actual_outcome IS NOT NULL THEN 1 ELSE 0 END) AS outcome_labeled FROM trade_records WHERE action != 'SKIP'"
         },
         "trade_log": {
           "title": "Trade Log (Simplified)",

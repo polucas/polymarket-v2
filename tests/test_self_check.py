@@ -409,9 +409,16 @@ async def test_daily_review_db_round_trip(db_with_experiment):
 @pytest.mark.asyncio
 async def test_get_recent_reviews_returns_multiple(db_with_experiment):
     """get_recent_reviews returns all reviews within the window."""
-    for date in ["2026-03-15", "2026-03-16", "2026-03-17"]:
+    # Use recent dates (within the last 30-day window) so the cutoff query finds them
+    from datetime import date, timedelta
+    today = date.today()
+    dates_to_insert = [
+        (today - timedelta(days=i)).strftime("%Y-%m-%d")
+        for i in range(3)
+    ]
+    for review_date in dates_to_insert:
         review = DailyReview(
-            review_date=date,
+            review_date=review_date,
             timestamp=datetime.now(timezone.utc),
             health_status="HEALTHY",
             experiment_run="test-run-001",
@@ -421,8 +428,72 @@ async def test_get_recent_reviews_returns_multiple(db_with_experiment):
     reviews = await db_with_experiment.get_recent_reviews(days=30)
     assert len(reviews) == 3
     # Should be in descending order
-    dates = [r.review_date for r in reviews]
-    assert dates == sorted(dates, reverse=True)
+    review_dates = [r.review_date for r in reviews]
+    assert review_dates == sorted(review_dates, reverse=True)
+
+
+@pytest.mark.asyncio
+async def test_gather_metrics_includes_pnl(db_with_experiment, sample_trade_record):
+    """_gather_metrics computes PnL-based metrics from trade_profitable column.
+
+    Insert 3 trades with trade_profitable set (2 profitable, 1 not).
+    Verify win_rate_pnl == 2/3, pnl_resolved_count == 3, and Brier averages in [0, 1].
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Trade 1: profitable (TP exit, no actual_outcome)
+    await db_with_experiment.save_trade(
+        sample_trade_record(
+            action="BUY_YES",
+            actual_outcome=None,
+            pnl=20.0,
+            exit_type="take_profit",
+            exit_price=0.70,
+            trade_profitable=1,
+            pnl_brier_raw=0.09,
+            pnl_brier_adjusted=0.08,
+            position_size_usd=100.0,
+        )
+    )
+    # Trade 2: profitable (natural resolution)
+    await db_with_experiment.save_trade(
+        sample_trade_record(
+            action="BUY_YES",
+            actual_outcome=True,
+            pnl=30.0,
+            brier_score_raw=0.05,
+            brier_score_adjusted=0.06,
+            trade_profitable=1,
+            pnl_brier_raw=0.04,
+            pnl_brier_adjusted=0.03,
+            position_size_usd=100.0,
+        )
+    )
+    # Trade 3: loss (SL exit)
+    await db_with_experiment.save_trade(
+        sample_trade_record(
+            action="BUY_YES",
+            actual_outcome=None,
+            pnl=-15.0,
+            exit_type="stop_loss",
+            exit_price=0.40,
+            trade_profitable=0,
+            pnl_brier_raw=0.49,
+            pnl_brier_adjusted=0.46,
+            position_size_usd=100.0,
+        )
+    )
+
+    metrics = await _gather_metrics(db_with_experiment, today)
+
+    assert metrics["pnl_resolved_count"] == 3
+    assert metrics["win_rate_pnl"] == pytest.approx(2 / 3)
+    assert metrics["avg_pnl_brier_raw"] is not None
+    assert metrics["avg_pnl_brier_adjusted"] is not None
+    # Average of [0.09, 0.04, 0.49] = 0.62/3 ≈ 0.2067
+    assert metrics["avg_pnl_brier_raw"] == pytest.approx((0.09 + 0.04 + 0.49) / 3, rel=1e-4)
+    assert 0.0 <= metrics["avg_pnl_brier_raw"] <= 1.0
+    assert 0.0 <= metrics["avg_pnl_brier_adjusted"] <= 1.0
 
 
 @pytest.mark.asyncio

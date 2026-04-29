@@ -245,3 +245,101 @@ class TestExperimentRuns:
         await db.end_experiment("exp-002", {"total_trades": 10, "total_pnl": 50.0})
         current = await db.get_current_experiment()
         assert current is None  # ended, no active experiment
+
+
+# ---------------------------------------------------------------------------
+# Dual-label: new DB tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestDualLabelDB:
+    """Tests for Phase 1 dual-label fields in trade_records and daily_reviews."""
+
+    async def test_get_open_trades_includes_exited(self, db, sample_trade_record):
+        """get_open_trades now returns trades with exit_type set (filter removal).
+        Both open-and-not-exited AND TP/SL-exited-but-unresolved should appear."""
+        trade_open = sample_trade_record(action="BUY_YES", actual_outcome=None)
+        trade_tp = sample_trade_record(
+            action="BUY_YES",
+            actual_outcome=None,
+            pnl=15.0,
+            exit_type="take_profit",
+            exit_price=0.65,
+        )
+        await db.save_trade(trade_open)
+        await db.save_trade(trade_tp)
+
+        opens = await db.get_open_trades()
+        ids = {t.record_id for t in opens}
+        assert trade_open.record_id in ids
+        assert trade_tp.record_id in ids
+
+    async def test_save_and_load_trade_with_dual_labels(self, db, sample_trade_record):
+        """Round-trip trade with trade_profitable, pnl_brier_raw, pnl_brier_adjusted."""
+        record = sample_trade_record(
+            action="BUY_YES",
+            pnl=30.0,
+            exit_type="take_profit",
+            exit_price=0.65,
+            trade_profitable=1,
+            pnl_brier_raw=0.04,
+            pnl_brier_adjusted=0.03,
+        )
+        await db.save_trade(record)
+        loaded = await db.get_trade(record.record_id)
+
+        assert loaded is not None
+        assert loaded.trade_profitable == 1
+        assert loaded.pnl_brier_raw == pytest.approx(0.04)
+        assert loaded.pnl_brier_adjusted == pytest.approx(0.03)
+
+    async def test_update_trade_persists_dual_labels(self, db, sample_trade_record):
+        """update_trade correctly persists all three dual-label fields."""
+        record = sample_trade_record(action="BUY_YES")
+        await db.save_trade(record)
+
+        # Simulate what resolution/ws_exit does after an exit
+        record.pnl = -10.0
+        record.exit_type = "stop_loss"
+        record.exit_price = 0.42
+        record.trade_profitable = 0
+        record.pnl_brier_raw = 0.49
+        record.pnl_brier_adjusted = 0.46
+        await db.update_trade(record)
+
+        loaded = await db.get_trade(record.record_id)
+        assert loaded.trade_profitable == 0
+        assert loaded.pnl_brier_raw == pytest.approx(0.49)
+        assert loaded.pnl_brier_adjusted == pytest.approx(0.46)
+
+    async def test_save_and_load_daily_review_with_pnl_metrics(self, db):
+        """Round-trip DailyReview with all 4 new pnl-metric fields populated."""
+        from src.models import DailyReview
+
+        review = DailyReview(
+            review_date="2026-04-28",
+            timestamp=datetime.now(timezone.utc),
+            trade_count=10,
+            skip_count=5,
+            resolved_count=8,
+            win_rate=0.625,
+            roi_pct=8.0,
+            total_pnl=40.0,
+            avg_brier_raw=0.12,
+            avg_brier_adjusted=0.11,
+            health_status="HEALTHY",
+            experiment_run="test-run-001",
+            win_rate_pnl=0.70,
+            avg_pnl_brier_raw=0.09,
+            avg_pnl_brier_adjusted=0.08,
+            pnl_resolved_count=7,
+        )
+        await db.save_daily_review(review)
+        loaded = await db.get_daily_review("2026-04-28")
+
+        assert loaded is not None
+        assert loaded.win_rate_pnl == pytest.approx(0.70)
+        assert loaded.avg_pnl_brier_raw == pytest.approx(0.09)
+        assert loaded.avg_pnl_brier_adjusted == pytest.approx(0.08)
+        assert loaded.pnl_resolved_count == 7

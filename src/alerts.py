@@ -48,12 +48,13 @@ def format_daily_summary(trades: List[TradeRecord], portfolio: Portfolio) -> str
     """Format daily summary alert."""
     executed = [t for t in trades if t.action != "SKIP"]
     skipped = [t for t in trades if t.action == "SKIP"]
-    resolved = [t for t in trades if t.actual_outcome is not None]
-    total_pnl = sum(t.pnl or 0 for t in resolved)
+    outcome_resolved = [t for t in trades if t.actual_outcome is not None]
+    labeled = [t for t in trades if t.actual_outcome is not None or t.trade_profitable is not None]
+    total_pnl = sum(t.pnl or 0 for t in labeled)
 
     return (
         f"<b>Daily Summary</b>\n"
-        f"Executed: {len(executed)} | Skipped: {len(skipped)} | Resolved: {len(resolved)}\n"
+        f"Executed: {len(executed)} | Skipped: {len(skipped)} | Labeled: {len(labeled)} | Outcome-resolved: {len(outcome_resolved)}\n"
         f"Day PnL: ${total_pnl:+.2f}\n"
         f"Portfolio: ${portfolio.total_equity:,.2f} (cash: ${portfolio.cash_balance:,.2f})\n"
         f"Drawdown: {portfolio.max_drawdown:.1%} | Open: {len(portfolio.open_positions)}"

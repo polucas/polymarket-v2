@@ -58,6 +58,9 @@ def sample_trade_record():
             "unrealized_adverse_move": None,
             "voided": False,
             "void_reason": None,
+            "trade_profitable": None,
+            "pnl_brier_raw": None,
+            "pnl_brier_adjusted": None,
         }
         defaults.update(overrides)
         return TradeRecord(**defaults)

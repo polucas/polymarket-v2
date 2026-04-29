@@ -70,8 +70,9 @@ class Database:
                 actual_outcome, pnl, brier_score_raw, brier_score_adjusted, resolved_at,
                 unrealized_adverse_move, voided, void_reason,
                 spread_at_decision, vwap_price, exit_type, exit_price,
-                clob_token_id_yes, clob_token_id_no
-            ) VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?, ?,?)""",
+                clob_token_id_yes, clob_token_id_no,
+                trade_profitable, pnl_brier_raw, pnl_brier_adjusted
+            ) VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?, ?,?, ?,?,?)""",
             (
                 r.record_id, r.experiment_run, _iso(r.timestamp), r.model_used,
                 r.market_id, r.market_question, r.market_type, r.resolution_window_hours,
@@ -88,6 +89,7 @@ class Database:
                 _iso(r.resolved_at), r.unrealized_adverse_move, r.voided, r.void_reason,
                 r.spread_at_decision, r.vwap_price, r.exit_type, r.exit_price,
                 r.clob_token_id_yes, r.clob_token_id_no,
+                r.trade_profitable, r.pnl_brier_raw, r.pnl_brier_adjusted,
             ),
         )
         await self._conn.commit()
@@ -138,6 +140,9 @@ class Database:
             exit_price=row["exit_price"] if "exit_price" in row.keys() else None,
             clob_token_id_yes=row["clob_token_id_yes"] if "clob_token_id_yes" in row.keys() else "",
             clob_token_id_no=row["clob_token_id_no"] if "clob_token_id_no" in row.keys() else "",
+            trade_profitable=row["trade_profitable"] if "trade_profitable" in row.keys() else None,
+            pnl_brier_raw=row["pnl_brier_raw"] if "pnl_brier_raw" in row.keys() else None,
+            pnl_brier_adjusted=row["pnl_brier_adjusted"] if "pnl_brier_adjusted" in row.keys() else None,
         )
 
     async def get_trade(self, record_id: str) -> Optional[TradeRecord]:
@@ -149,7 +154,7 @@ class Database:
 
     async def get_open_trades(self) -> List[TradeRecord]:
         cursor = await self._conn.execute(
-            "SELECT * FROM trade_records WHERE actual_outcome IS NULL AND voided = FALSE AND action != 'SKIP' AND exit_type IS NULL"
+            "SELECT * FROM trade_records WHERE actual_outcome IS NULL AND voided = FALSE AND action != 'SKIP'"
         )
         rows = await cursor.fetchall()
         return [self._row_to_trade(r) for r in rows]
@@ -177,12 +182,14 @@ class Database:
             """UPDATE trade_records SET
                 actual_outcome=?, pnl=?, brier_score_raw=?, brier_score_adjusted=?,
                 resolved_at=?, unrealized_adverse_move=?, voided=?, void_reason=?,
-                exit_type=?, exit_price=?
+                exit_type=?, exit_price=?,
+                trade_profitable=?, pnl_brier_raw=?, pnl_brier_adjusted=?
             WHERE record_id=?""",
             (
                 r.actual_outcome, r.pnl, r.brier_score_raw, r.brier_score_adjusted,
                 _iso(r.resolved_at), r.unrealized_adverse_move, r.voided, r.void_reason,
                 r.exit_type, r.exit_price,
+                r.trade_profitable, r.pnl_brier_raw, r.pnl_brier_adjusted,
                 r.record_id,
             ),
         )
@@ -535,8 +542,9 @@ class Database:
              win_rate, roi_pct, total_pnl, avg_brier_raw, avg_brier_adjusted,
              brier_by_market_type, calibration_drift, signal_effectiveness,
              skip_reason_distribution, top_performing_types, worst_performing_types,
-             llm_insights, llm_recommendations, health_status, experiment_run)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             llm_insights, llm_recommendations, health_status, experiment_run,
+             win_rate_pnl, avg_pnl_brier_raw, avg_pnl_brier_adjusted, pnl_resolved_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 review.review_date, review.timestamp.isoformat(),
                 review.trade_count, review.skip_count, review.resolved_count,
@@ -547,6 +555,8 @@ class Database:
                 json.dumps(review.top_performing_types), json.dumps(review.worst_performing_types),
                 review.llm_insights, json.dumps(review.llm_recommendations),
                 review.health_status, review.experiment_run,
+                review.win_rate_pnl, review.avg_pnl_brier_raw, review.avg_pnl_brier_adjusted,
+                review.pnl_resolved_count,
             ),
         )
         await self._conn.commit()
@@ -597,6 +607,10 @@ class Database:
             llm_recommendations=json.loads(row["llm_recommendations"]) if row["llm_recommendations"] else [],
             health_status=row["health_status"] or "UNKNOWN",
             experiment_run=row["experiment_run"] or "",
+            win_rate_pnl=row["win_rate_pnl"] if "win_rate_pnl" in row.keys() else None,
+            avg_pnl_brier_raw=row["avg_pnl_brier_raw"] if "avg_pnl_brier_raw" in row.keys() else None,
+            avg_pnl_brier_adjusted=row["avg_pnl_brier_adjusted"] if "avg_pnl_brier_adjusted" in row.keys() else None,
+            pnl_resolved_count=row["pnl_resolved_count"] if "pnl_resolved_count" in row.keys() else 0,
         )
 
     async def get_period_trade_stats(self, start_date: str, end_date: str) -> dict:

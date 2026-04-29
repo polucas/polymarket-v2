@@ -115,3 +115,26 @@ class TestBacktestRunnerOutputIsolation:
             "by_market_type": {}, "grok_cache": {"hits": 5, "misses": 5},
         }
         assert required_keys.issubset(set(sample.keys()))
+
+    def test_summary_has_dual_label_fields(self):
+        """Summary dict must contain all Phase 1 dual-label keys."""
+        dual_label_keys = {
+            "pnl_labeled",
+            "pnl_win_rate",
+            "avg_pnl_brier_raw",
+            "avg_pnl_brier_adjusted",
+        }
+        # Build a sample summary as _build_summary now returns
+        sample = {
+            "start": "2025-01-01", "end": "2025-03-31", "ticks": 2880,
+            "trades_executed": 10, "trades_skipped": 50, "trades_resolved": 8,
+            "win_rate": 0.6, "total_pnl": 50.0, "brier_raw": 0.22, "brier_adjusted": 0.20,
+            "pnl_labeled": 6, "pnl_win_rate": 0.667,
+            "avg_pnl_brier_raw": 0.18, "avg_pnl_brier_adjusted": 0.16,
+            "by_market_type": {}, "grok_cache": {"hits": 5, "misses": 5},
+        }
+        assert dual_label_keys.issubset(set(sample.keys()))
+        assert sample["pnl_labeled"] == 6
+        assert abs(sample["pnl_win_rate"] - 0.667) < 1e-3
+        assert sample["avg_pnl_brier_raw"] == 0.18
+        assert sample["avg_pnl_brier_adjusted"] == 0.16

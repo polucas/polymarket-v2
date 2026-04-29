@@ -449,3 +449,68 @@ class TestLogging:
         debug_events = [e for e in cap_logs if e.get("event") == "ws_event_unrecognized"]
         assert debug_events, f"Expected ws_event_unrecognized in logs, got: {cap_logs}"
         assert debug_events[0].get("event_type") == "int"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Dual-label writes (trade_profitable + pnl_brier_*)
+# ---------------------------------------------------------------------------
+
+
+class TestDualLabelWrites:
+    @pytest.mark.asyncio
+    async def test_trigger_exit_writes_trade_profitable_on_tp(self):
+        """TP fire (positive pnl): trade_profitable=1, pnl_brier_raw and _adjusted set in [0,1]."""
+        # Entry 0.50, bid 0.65 → ROI ~30% → TP
+        trade = _make_trade(entry_price=0.50)
+        mgr = _build_manager(trades=[trade], portfolio=_make_portfolio())
+        mgr._active_positions = {trade.clob_token_id_yes: trade}
+
+        ws_message = [{
+            "event_type": "book",
+            "asset_id": trade.clob_token_id_yes,
+            "bids": [{"price": "0.65", "size": "100"}],
+            "asks": [],
+        }]
+
+        with patch("src.engine.ws_exit.send_alert", new_callable=AsyncMock):
+            await mgr._handle_message(ws_message)
+
+        mgr.db.update_trade.assert_called_once()
+        updated = mgr.db.update_trade.call_args[0][0]
+
+        assert updated.exit_type == "take_profit"
+        assert updated.pnl > 0
+        assert updated.trade_profitable == 1
+        assert updated.pnl_brier_raw is not None
+        assert updated.pnl_brier_adjusted is not None
+        assert 0.0 <= updated.pnl_brier_raw <= 1.0
+        assert 0.0 <= updated.pnl_brier_adjusted <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_trigger_exit_writes_trade_profitable_on_sl(self):
+        """SL fire (negative pnl): trade_profitable=0, pnl_brier_raw and _adjusted set in [0,1]."""
+        # Entry 0.50, bid 0.40 → ROI -20% → SL
+        trade = _make_trade(entry_price=0.50)
+        mgr = _build_manager(trades=[trade], portfolio=_make_portfolio())
+        mgr._active_positions = {trade.clob_token_id_yes: trade}
+
+        ws_message = [{
+            "event_type": "book",
+            "asset_id": trade.clob_token_id_yes,
+            "bids": [{"price": "0.40", "size": "100"}],
+            "asks": [],
+        }]
+
+        with patch("src.engine.ws_exit.send_alert", new_callable=AsyncMock):
+            await mgr._handle_message(ws_message)
+
+        mgr.db.update_trade.assert_called_once()
+        updated = mgr.db.update_trade.call_args[0][0]
+
+        assert updated.exit_type == "stop_loss"
+        assert updated.pnl < 0
+        assert updated.trade_profitable == 0
+        assert updated.pnl_brier_raw is not None
+        assert updated.pnl_brier_adjusted is not None
+        assert 0.0 <= updated.pnl_brier_raw <= 1.0
+        assert 0.0 <= updated.pnl_brier_adjusted <= 1.0

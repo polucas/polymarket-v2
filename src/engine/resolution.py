@@ -105,6 +105,18 @@ async def auto_resolve_trades(db: Database, polymarket_client) -> List[TradeReco
             trade.brier_score_raw = brier_raw
             trade.brier_score_adjusted = brier_adjusted
             trade.resolved_at = Clock.utcnow()
+            # Dual-label: also write pnl-based label for consistency
+            trade.trade_profitable = 1 if trade.pnl > 0 else 0
+            predicted_raw = (
+                trade.grok_raw_probability if trade.action == "BUY_YES"
+                else 1 - trade.grok_raw_probability
+            )
+            trade.pnl_brier_raw = (predicted_raw - trade.trade_profitable) ** 2
+            predicted_adj = (
+                trade.final_adjusted_probability if trade.action == "BUY_YES"
+                else 1 - trade.final_adjusted_probability
+            )
+            trade.pnl_brier_adjusted = (predicted_adj - trade.trade_profitable) ** 2
 
             await db.update_trade(trade)
 
@@ -220,6 +232,18 @@ async def check_early_exits(
             trade.pnl = pnl
             trade.resolved_at = Clock.utcnow()
             # Do NOT set actual_outcome — the event hasn't resolved yet
+            # Dual-label: write pnl-based label immediately on exit
+            trade.trade_profitable = 1 if trade.pnl > 0 else 0
+            predicted_raw = (
+                trade.grok_raw_probability if trade.action == "BUY_YES"
+                else 1 - trade.grok_raw_probability
+            )
+            trade.pnl_brier_raw = (predicted_raw - trade.trade_profitable) ** 2
+            predicted_adj = (
+                trade.final_adjusted_probability if trade.action == "BUY_YES"
+                else 1 - trade.final_adjusted_probability
+            )
+            trade.pnl_brier_adjusted = (predicted_adj - trade.trade_profitable) ** 2
 
             await db.update_trade(trade)
 
