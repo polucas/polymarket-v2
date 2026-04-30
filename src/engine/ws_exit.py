@@ -80,10 +80,18 @@ class RealTimeExitManager:
     # ------------------------------------------------------------------
 
     async def _refresh_positions(self) -> None:
-        """Load open trades from DB, index by YES token_id."""
+        """Load open trades from DB, index by YES token_id.
+
+        get_open_trades() returns both unexited and already-exited trades
+        (Phase 1 design — auto_resolve_trades needs the latter for natural
+        resolution). The WS exit path must skip already-exited trades to
+        avoid re-firing TP/SL on positions that were already closed.
+        """
         trades = await self.db.get_open_trades()
         self._active_positions = {}
         for t in trades:
+            if t.exit_type is not None:
+                continue
             if t.clob_token_id_yes:
                 self._active_positions[t.clob_token_id_yes] = t
 
@@ -216,6 +224,10 @@ class RealTimeExitManager:
 
     async def _trigger_exit(self, trade: TradeRecord, best_bid: float, exit_type: str) -> None:
         """Execute an early exit immediately."""
+        # Defensive: never re-fire on an already-exited trade
+        if trade.exit_type is not None:
+            self._active_positions.pop(trade.clob_token_id_yes, None)
+            return
         # Remove from tracking to prevent double-fire
         self._active_positions.pop(trade.clob_token_id_yes, None)
 

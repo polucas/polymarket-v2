@@ -110,6 +110,21 @@ class TestRefreshPositions:
 
         assert len(mgr._active_positions) == 0
 
+    @pytest.mark.asyncio
+    async def test_skips_already_exited_trades(self):
+        """get_open_trades() returns already-exited trades (Phase 1 design);
+        WS path must skip them so it doesn't re-fire TP/SL on closed positions."""
+        exited = _make_trade(clob_token_id_yes="tok-exited")
+        exited.exit_type = "take_profit"
+        unexited = _make_trade(clob_token_id_yes="tok-open")
+        unexited.exit_type = None
+        mgr = _build_manager(trades=[exited, unexited])
+
+        await mgr._refresh_positions()
+
+        assert "tok-exited" not in mgr._active_positions
+        assert "tok-open" in mgr._active_positions
+
 
 # ---------------------------------------------------------------------------
 # Tests: Message handling — take profit
