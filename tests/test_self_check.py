@@ -546,3 +546,147 @@ async def test_run_daily_self_check_with_grok_success(db_with_experiment):
     assert loaded is not None
     assert loaded.health_status == "HEALTHY"
     assert loaded.llm_insights == "Good day overall."
+
+
+# ---------------------------------------------------------------------------
+# Test: run_daily_self_check uses json_object response_format + max_tokens=4000
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_self_check_uses_json_mode_and_higher_max_tokens(db_with_experiment):
+    """grok.complete must be called with max_tokens=4000 and response_format={'type':'json_object'}."""
+    calibration_mgr = CalibrationManager()
+    market_type_mgr = MarketTypeManager()
+    signal_tracker_mgr = SignalTrackerManager()
+
+    mock_grok = MagicMock()
+    mock_grok.complete = AsyncMock(
+        return_value='{"insights": "x", "recommendations": ["y"], "health_status": "HEALTHY"}'
+    )
+
+    mock_settings = MagicMock()
+
+    with patch("src.learning.self_check.REVIEW_DIR", tempfile.mkdtemp()):
+        await run_daily_self_check(
+            db_with_experiment,
+            mock_grok,
+            calibration_mgr,
+            market_type_mgr,
+            signal_tracker_mgr,
+            mock_settings,
+        )
+
+    assert mock_grok.complete.call_count >= 1
+    call_kwargs = mock_grok.complete.call_args.kwargs
+    assert call_kwargs["max_tokens"] == 4000
+    assert call_kwargs["response_format"] == {"type": "json_object"}
+
+
+# ---------------------------------------------------------------------------
+# Test: run_daily_self_check retries on parse failure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_self_check_retries_on_parse_failure(db_with_experiment):
+    """First call returns unparseable output; second call returns valid JSON.
+    Checks: 2 calls made, review populated from second response, warning logged."""
+    calibration_mgr = CalibrationManager()
+    market_type_mgr = MarketTypeManager()
+    signal_tracker_mgr = SignalTrackerManager()
+
+    mock_grok = MagicMock()
+    mock_grok.complete = AsyncMock(
+        side_effect=[
+            "<think>truncated",
+            '{"insights": "ok", "recommendations": ["x"], "health_status": "HEALTHY"}',
+        ]
+    )
+
+    mock_settings = MagicMock()
+
+    with patch("src.learning.self_check.REVIEW_DIR", tempfile.mkdtemp()), \
+         patch("src.learning.self_check.asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
+         patch("src.learning.self_check.log") as mock_log:
+        review = await run_daily_self_check(
+            db_with_experiment,
+            mock_grok,
+            calibration_mgr,
+            market_type_mgr,
+            signal_tracker_mgr,
+            mock_settings,
+        )
+
+    # Two attempts made
+    assert mock_grok.complete.call_count == 2
+
+    # Review populated from the successful second attempt
+    assert review.llm_insights == "ok"
+    assert review.health_status == "HEALTHY"
+
+    # Sleep called once between attempts
+    mock_sleep.assert_awaited_once_with(1.0)
+
+    # Warning logged with raw_preview containing the failed response text
+    warning_calls = mock_log.warning.call_args_list
+    assert len(warning_calls) >= 1
+    first_warning = warning_calls[0]
+    # structlog uses positional arg for event name
+    assert first_warning[0][0] == "self_check_grok_parse_failed"
+    assert "raw_preview" in first_warning[1]
+    assert "truncated" in first_warning[1]["raw_preview"]
+
+
+# ---------------------------------------------------------------------------
+# Test: calibration_drift suppressed when bucket has n < 10 observations
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_self_check_drift_suppressed_when_n_lt_10(db_with_experiment):
+    """Buckets with fewer than 10 observations produce string 'insufficient (n=X)';
+    buckets with >=10 produce a float drift value."""
+    calibration_mgr = CalibrationManager()
+    market_type_mgr = MarketTypeManager()
+    signal_tracker_mgr = SignalTrackerManager()
+
+    # bucket[0]: alpha=1.0, beta=1.0 → n = int(round(1+1-2)) = 0 → suppressed
+    calibration_mgr.buckets[0].alpha = 1.0
+    calibration_mgr.buckets[0].beta = 1.0
+
+    # bucket[1]: alpha=7.0, beta=5.0 → n = int(round(7+5-2)) = 10 → NOT suppressed
+    calibration_mgr.buckets[1].alpha = 7.0
+    calibration_mgr.buckets[1].beta = 5.0
+
+    mock_grok = MagicMock()
+    mock_grok.complete = AsyncMock(
+        return_value='{"insights": "fine", "recommendations": [], "health_status": "HEALTHY"}'
+    )
+
+    mock_settings = MagicMock()
+
+    with patch("src.learning.self_check.REVIEW_DIR", tempfile.mkdtemp()):
+        review = await run_daily_self_check(
+            db_with_experiment,
+            mock_grok,
+            calibration_mgr,
+            market_type_mgr,
+            signal_tracker_mgr,
+            mock_settings,
+        )
+
+    drift = review.calibration_drift
+
+    # Build expected keys from bucket ranges
+    b0 = calibration_mgr.buckets[0]
+    b1 = calibration_mgr.buckets[1]
+    key0 = f"{b0.bucket_range[0]:.2f}-{b0.bucket_range[1]:.2f}"
+    key1 = f"{b1.bucket_range[0]:.2f}-{b1.bucket_range[1]:.2f}"
+
+    assert key0 in drift
+    assert isinstance(drift[key0], str)
+    assert drift[key0].startswith("insufficient")
+
+    assert key1 in drift
+    assert isinstance(drift[key1], float)

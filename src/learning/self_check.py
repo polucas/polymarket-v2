@@ -6,6 +6,7 @@ Does NOT auto-implement changes — only documents recommendations.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime, timezone, timedelta
@@ -277,6 +278,10 @@ async def run_daily_self_check(
     calibration_drift = {}
     for bucket in calibration_mgr.buckets:
         key = f"{bucket.bucket_range[0]:.2f}-{bucket.bucket_range[1]:.2f}"
+        n = int(round(bucket.alpha + bucket.beta - 2.0))  # priors are 1.0 each
+        if n < 10:
+            calibration_drift[key] = f"insufficient (n={n})"
+            continue
         midpoint = (bucket.bucket_range[0] + bucket.bucket_range[1]) / 2
         expected = bucket.alpha / (bucket.alpha + bucket.beta)
         calibration_drift[key] = round(expected - midpoint, 4)
@@ -300,20 +305,34 @@ async def run_daily_self_check(
     health_status = "UNKNOWN"
 
     prompt = _build_llm_prompt(metrics, review_date)
-    try:
-        raw_response = await grok.complete(prompt, max_tokens=1000)
-        parsed = parse_json_safe(raw_response)
-        if parsed:
-            llm_insights = parsed.get("insights", "")
-            llm_recommendations = parsed.get("recommendations", [])
-            health_status = parsed.get("health_status", "UNKNOWN")
-            if not isinstance(llm_recommendations, list):
-                llm_recommendations = [str(llm_recommendations)]
-        else:
-            log.warning("self_check_grok_parse_failed")
-            health_status = "UNKNOWN"
-    except Exception as e:
-        log.error("self_check_grok_error", error=str(e))
+    raw_response = ""
+    parsed_ok = False
+    for attempt in range(2):
+        try:
+            raw_response = await grok.complete(
+                prompt,
+                max_tokens=4000,
+                response_format={"type": "json_object"},
+            )
+            parsed = parse_json_safe(raw_response)
+            if parsed:
+                llm_insights = parsed.get("insights", "")
+                llm_recommendations = parsed.get("recommendations", [])
+                health_status = parsed.get("health_status", "UNKNOWN")
+                if not isinstance(llm_recommendations, list):
+                    llm_recommendations = [str(llm_recommendations)]
+                parsed_ok = True
+                break
+            log.warning(
+                "self_check_grok_parse_failed",
+                attempt=attempt,
+                raw_preview=raw_response[:500] if raw_response else "",
+            )
+        except Exception as e:
+            log.error("self_check_grok_error", attempt=attempt, error=str(e))
+        if attempt == 0:
+            await asyncio.sleep(1.0)
+    if not parsed_ok:
         health_status = "UNKNOWN"
 
     # Step 6: Build review

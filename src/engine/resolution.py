@@ -207,6 +207,8 @@ async def check_early_exits(
     portfolio = await db.load_portfolio()
 
     for trade in open_trades:
+        if trade.exit_type is not None:
+            continue  # Already exited — auto_resolve_trades handles natural resolution
         try:
             market = await polymarket_client.get_market(trade.market_id)
             if market is None or market.resolved:

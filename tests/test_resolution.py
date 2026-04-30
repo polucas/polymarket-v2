@@ -711,6 +711,57 @@ class TestAutoResolveDualLabel:
         assert trade.brier_score_adjusted is not None
 
 
+class TestCheckEarlyExitsSkipsAlreadyExitedTrades:
+    """check_early_exits skips trades that already have exit_type set."""
+
+    @pytest.mark.asyncio
+    async def test_check_early_exits_skips_already_exited_trades(self):
+        """Trade A (exit_type='take_profit') must be skipped; Trade B (exit_type=None)
+        must have get_market called. Since B's price doesn't trigger TP/SL,
+        no update_trade calls should occur."""
+        trade_a = _make_record(
+            action="BUY_YES",
+            market_id="mkt-exited",
+            market_price_at_decision=0.50,
+            position_size_usd=100.0,
+            actual_outcome=None,
+            pnl=15.0,
+        )
+        trade_a.exit_type = "take_profit"
+
+        trade_b = _make_record(
+            action="BUY_YES",
+            market_id="mkt-open",
+            market_price_at_decision=0.50,
+            position_size_usd=100.0,
+            actual_outcome=None,
+            pnl=None,
+        )
+        # trade_b.exit_type is None (default)
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade_a, trade_b]
+        mock_db.load_portfolio.return_value = Portfolio(
+            cash_balance=9900.0, total_equity=10000.0, peak_equity=10000.0
+        )
+
+        # Return a market that does NOT trigger TP/SL (current price == entry price → ROI=0)
+        mock_market = SimpleNamespace(resolved=False, resolution=None, yes_price=0.50)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        settings = _make_settings_mock()
+
+        await check_early_exits(mock_db, mock_client, settings)
+
+        # Only trade_b should have triggered a get_market call
+        assert mock_client.get_market.call_count == 1
+        assert mock_client.get_market.call_args[0][0] == "mkt-open"
+
+        # Neither trade triggered TP/SL → no update_trade
+        mock_db.update_trade.assert_not_awaited()
+
+
 class TestNaturalResolutionAfterTpExit:
     """After TP/SL exit, auto_resolve_trades can still write actual_outcome."""
 
