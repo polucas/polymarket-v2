@@ -797,3 +797,119 @@ class TestNaturalResolutionAfterTpExit:
 
         mock_db.update_trade.assert_awaited_once()
         assert trade.actual_outcome is True
+
+
+# ---------------------------------------------------------------------------
+# F2 Tests: already_exited guard in auto_resolve_trades
+# ---------------------------------------------------------------------------
+
+
+class TestAutoResolveSkipsPortfolioForEarlyExited:
+    """auto_resolve_trades: when exit_type is set, only write brier/outcome; skip pnl + portfolio."""
+
+    @pytest.mark.asyncio
+    async def test_skips_portfolio_update_for_early_exited(self):
+        """Trade with exit_type='stop_loss' and pnl=-15 already set.
+        Resolution writes actual_outcome + brier scores but leaves pnl and portfolio unchanged."""
+        trade = _make_record(
+            action="BUY_YES",
+            market_type="political",
+            grok_raw_probability=0.75,
+            final_adjusted_probability=0.73,
+            market_price_at_decision=0.60,
+            position_size_usd=100.0,
+            fee_rate=0.0,
+            actual_outcome=None,
+            pnl=-15.0,
+        )
+        trade.exit_type = "stop_loss"
+
+        portfolio = Portfolio(cash_balance=10000.0, total_equity=10000.0, peak_equity=10000.0)
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+        mock_db.load_portfolio.return_value = portfolio
+
+        mock_market = SimpleNamespace(resolved=True, resolution="YES", yes_price=1.0)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        result = await auto_resolve_trades(mock_db, mock_client)
+
+        # update_trade must be called once with actual_outcome + brier scores
+        mock_db.update_trade.assert_awaited_once()
+        assert trade.actual_outcome is True
+        assert trade.brier_score_raw is not None
+        assert isinstance(trade.brier_score_raw, float)
+        assert trade.resolved_at is not None
+
+        # pnl must NOT be overwritten by resolution
+        assert trade.pnl == -15.0
+
+        # portfolio save must NOT be called for already-exited trade
+        mock_db.save_portfolio.assert_not_awaited()
+
+        # trade appears in returned list
+        assert trade in result
+
+
+class TestAutoResolveUpdatesPortfolioForUnexited:
+    """auto_resolve_trades: unexited trade gets full pnl calc + portfolio update."""
+
+    @pytest.mark.asyncio
+    async def test_updates_portfolio_for_unexited(self):
+        """Trade with exit_type=None gets pnl calculated and portfolio saved."""
+        trade = _make_record(
+            action="BUY_YES",
+            market_type="political",
+            grok_raw_probability=0.75,
+            final_adjusted_probability=0.73,
+            market_price_at_decision=0.60,
+            position_size_usd=100.0,
+            fee_rate=0.0,
+            actual_outcome=None,
+            pnl=None,
+        )
+        # exit_type is None by default in _make_record (TradeRecord default)
+
+        portfolio = Portfolio(
+            cash_balance=9900.0,
+            total_equity=10000.0,
+            peak_equity=10000.0,
+            open_positions=[Position(
+                market_id="mkt-001",
+                side="BUY_YES",
+                entry_price=0.60,
+                size_usd=100.0,
+                current_value=100.0,
+            )],
+        )
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+        mock_db.load_portfolio.return_value = portfolio
+
+        mock_market = SimpleNamespace(resolved=True, resolution="YES", yes_price=1.0)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        initial_cash = portfolio.cash_balance
+
+        await auto_resolve_trades(mock_db, mock_client)
+
+        # pnl should be calculated (BUY_YES, YES outcome, entry=0.60, size=100, fee=0)
+        # pnl = 100*(1-0.60) - 0 = 40
+        assert trade.pnl is not None
+        assert trade.pnl == pytest.approx(40.0)
+
+        # trade_profitable and pnl_brier_* should be set
+        assert trade.trade_profitable == 1
+        assert trade.pnl_brier_raw is not None
+        assert trade.pnl_brier_adjusted is not None
+
+        # portfolio should have been saved
+        mock_db.save_portfolio.assert_awaited_once()
+
+        # cash_balance should increase
+        saved_portfolio = mock_db.save_portfolio.call_args[0][0]
+        assert saved_portfolio.cash_balance > initial_cash

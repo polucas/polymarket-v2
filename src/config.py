@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     TAKE_PROFIT_ROI: float = 0.20
     STOP_LOSS_ROI: float = -0.15
     EARLY_EXIT_ENABLED: bool = True
+    FAST_EXIT_POLL_INTERVAL_SECONDS: int = 60
+    WS_HEARTBEAT_SECONDS: int = 10
 
     # Monk Mode
     DAILY_LOSS_LIMIT_PCT: float = 0.05
@@ -85,6 +87,13 @@ class Settings(BaseSettings):
 
     # Initial Bankroll
     INITIAL_BANKROLL: float = 10000.0
+    MIN_HOURS_TO_RESOLUTION: float = 0.5
+    DISABLED_MARKET_TYPES: str = ""
+    TWITTER_ENABLED: bool = True
+
+    @property
+    def disabled_market_types_set(self) -> set:
+        return {t.strip() for t in self.DISABLED_MARKET_TYPES.split(",") if t.strip()}
 
     def safe_config(self) -> dict:
         """Return config dict with secret fields redacted for DB storage."""

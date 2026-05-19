@@ -529,3 +529,36 @@ class TestDualLabelWrites:
         assert updated.pnl_brier_adjusted is not None
         assert 0.0 <= updated.pnl_brier_raw <= 1.0
         assert 0.0 <= updated.pnl_brier_adjusted <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# F2 Tests: WS_HEARTBEAT_SECONDS used in ws_connect
+# ---------------------------------------------------------------------------
+
+
+class TestWsHeartbeatFromSettings:
+    """_listen_loop passes settings.WS_HEARTBEAT_SECONDS as heartbeat to ws_connect."""
+
+    def test_ws_heartbeat_default_value(self):
+        """Default WS_HEARTBEAT_SECONDS is 10."""
+        from src.config import Settings
+        s = Settings(XAI_API_KEY="x", POLYMARKET_API_KEY="y")
+        assert s.WS_HEARTBEAT_SECONDS == 10
+
+    def test_ws_heartbeat_custom_value(self):
+        """WS_HEARTBEAT_SECONDS can be overridden."""
+        from src.config import Settings
+        s = Settings(XAI_API_KEY="x", POLYMARKET_API_KEY="y", WS_HEARTBEAT_SECONDS=5)
+        assert s.WS_HEARTBEAT_SECONDS == 5
+
+    def test_listen_loop_uses_settings_heartbeat(self):
+        """Verify _listen_loop source uses self.settings.WS_HEARTBEAT_SECONDS (not hardcoded 30)."""
+        import inspect
+        import src.engine.ws_exit as ws_mod
+        source = inspect.getsource(ws_mod.RealTimeExitManager._listen_loop)
+        assert "WS_HEARTBEAT_SECONDS" in source, (
+            "_listen_loop must reference settings.WS_HEARTBEAT_SECONDS"
+        )
+        assert "heartbeat=30" not in source, (
+            "_listen_loop must not use hardcoded heartbeat=30"
+        )

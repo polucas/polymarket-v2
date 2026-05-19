@@ -35,6 +35,7 @@ class TestMarketFilterLogging:
         settings.MARKET_FETCH_PAGES = 3
         settings.MIN_TRADEABLE_PRICE = 0.05
         settings.MAX_TRADEABLE_PRICE = 0.95
+        settings.MIN_HOURS_TO_RESOLUTION = 0.25
         client = PolymarketClient(settings)
 
         # Use dynamic dates relative to now

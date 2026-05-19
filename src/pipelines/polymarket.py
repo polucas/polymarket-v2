@@ -162,7 +162,7 @@ class PolymarketClient:
 
                 # Apply tier filters
                 if tier == 1:
-                    if hours_to_resolution < 0.25 or hours_to_resolution > 168:
+                    if hours_to_resolution < self._settings.MIN_HOURS_TO_RESOLUTION or hours_to_resolution > 168:
                         filtered_resolution += 1
                         continue
                     if liquidity < 5000:

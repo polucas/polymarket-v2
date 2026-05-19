@@ -112,7 +112,7 @@ class RealTimeExitManager:
                     continue
 
                 async with aiohttp.ClientSession() as session:
-                    async with session.ws_connect(WS_URL, heartbeat=30) as ws:
+                    async with session.ws_connect(WS_URL, heartbeat=self.settings.WS_HEARTBEAT_SECONDS) as ws:
                         await self._subscribe(ws, token_ids)
                         self._connected = True
                         backoff = 1  # reset on successful connect

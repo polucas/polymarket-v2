@@ -76,6 +76,10 @@ def _build_scheduler() -> Scheduler:
     settings.EARLY_EXIT_ENABLED = True
     settings.PRESCREEN_ENABLED = False
     settings.WEAK_SIGNAL_STRENGTH_THRESHOLD = 0.45
+    settings.TWITTER_ENABLED = True
+    settings.disabled_market_types_set = set()
+    settings.FAST_EXIT_POLL_INTERVAL_SECONDS = 60
+    settings.WS_HEARTBEAT_SECONDS = 10
 
     db = AsyncMock()
     polymarket = AsyncMock()
@@ -608,3 +612,154 @@ class TestWeakSignalGate:
 
         # orderbook was fetched (gate did not fire)
         scheduler._polymarket.get_orderbook.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# F2 Tests: _fast_exit_check, market_type_disabled_env, twitter_disabled
+# ---------------------------------------------------------------------------
+
+
+class TestFastExitCheck:
+    """_fast_exit_check dispatches to check_early_exits only when WS is disconnected."""
+
+    @pytest.mark.asyncio
+    async def test_noop_when_ws_connected(self):
+        """When ws_exit_mgr._connected=True, check_early_exits must NOT be called."""
+        scheduler = _build_scheduler()
+        scheduler.ws_exit_mgr = MagicMock()
+        scheduler.ws_exit_mgr._connected = True
+
+        # _fast_exit_check uses a local import, so patch at the module level
+        with patch(
+            "src.engine.resolution.check_early_exits", new_callable=AsyncMock
+        ) as mock_check:
+            await scheduler._fast_exit_check()
+
+        mock_check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fires_when_ws_disconnected(self):
+        """When ws_exit_mgr._connected=False, check_early_exits must be called once."""
+        scheduler = _build_scheduler()
+        scheduler.ws_exit_mgr = MagicMock()
+        scheduler.ws_exit_mgr._connected = False
+
+        # _fast_exit_check uses: from src.engine.resolution import check_early_exits
+        with patch(
+            "src.engine.resolution.check_early_exits", new_callable=AsyncMock
+        ) as mock_check:
+            await scheduler._fast_exit_check()
+
+        mock_check.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_noop_when_ws_exit_mgr_none(self):
+        """When ws_exit_mgr is None, check_early_exits must NOT be called."""
+        scheduler = _build_scheduler()
+        scheduler.ws_exit_mgr = None
+
+        with patch(
+            "src.engine.resolution.check_early_exits", new_callable=AsyncMock
+        ) as mock_check:
+            await scheduler._fast_exit_check()
+
+        mock_check.assert_not_called()
+
+
+class TestMarketTypeDisabledEnv:
+    """_process_market: env-gate DISABLED_MARKET_TYPES skips before learned disable."""
+
+    @pytest.mark.asyncio
+    async def test_skip_market_type_disabled_via_env(self):
+        """Market with market_type='sports' skipped when DISABLED_MARKET_TYPES='sports'."""
+        scheduler = _build_scheduler()
+        # Make disabled_market_types_set return {"sports"}
+        scheduler._settings.disabled_market_types_set = {"sports"}
+        scheduler._market_type_mgr.should_disable.return_value = False
+        scheduler._twitter.get_signals_for_market.return_value = []
+
+        market = _make_market(market_type="sports")
+
+        with patch("src.scheduler.extract_keywords", return_value=["sports"]):
+            await scheduler._process_market(
+                market=market,
+                rss_signals=[],
+                scan_mode="normal",
+                candidates=[],
+                all_skips=[],
+                today_trades=[],
+                experiment_run="exp-001",
+                tier=1,
+            )
+
+        # save_trade must be called once with market_type_disabled_env
+        scheduler._db.save_trade.assert_called_once()
+        saved_record = scheduler._db.save_trade.call_args[0][0]
+        assert saved_record.skip_reason == "market_type_disabled_env"
+
+        # Learned disable must NOT have been called (env gate fires first)
+        scheduler._market_type_mgr.should_disable.assert_not_called()
+
+
+class TestTwitterDisabledGate:
+    """_process_market: when TWITTER_ENABLED=False, twitter.get_signals_for_market not called."""
+
+    @pytest.mark.asyncio
+    async def test_twitter_disabled_skips_fetch(self):
+        """With TWITTER_ENABLED=False, twitter signal fetch is bypassed (twitter_signals=[])."""
+        scheduler = _build_scheduler()
+        scheduler._settings.TWITTER_ENABLED = False
+        scheduler._settings.disabled_market_types_set = set()
+        scheduler._market_type_mgr.should_disable.return_value = False
+
+        # Provide one strong RSS signal so the no_signals / weak_signal gates don't fire
+        strong_rss = _make_signal(content="will x happen politics", credibility=0.8)
+
+        # LLM returns None -> grok_failed (we just need to get past the Twitter gate)
+        scheduler._grok.call_grok_with_retry.return_value = None
+        scheduler._grok.call_prescreen.return_value = None
+        scheduler._polymarket.get_orderbook.return_value = MagicMock()
+
+        market = _make_market()
+
+        with patch("src.scheduler.extract_keywords", return_value=["x", "happen"]):
+            await scheduler._process_market(
+                market=market,
+                rss_signals=[strong_rss],
+                scan_mode="normal",
+                candidates=[],
+                all_skips=[],
+                today_trades=[],
+                experiment_run="exp-001",
+                tier=1,
+            )
+
+        # Twitter fetch must NOT have been called
+        scheduler._twitter.get_signals_for_market.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# F2: disabled_market_types_set property parses DISABLED_MARKET_TYPES correctly
+# ---------------------------------------------------------------------------
+
+
+class TestDisabledMarketTypesSetProperty:
+    """Settings.disabled_market_types_set parses comma-separated env var."""
+
+    def test_empty_string_gives_empty_set(self):
+        from src.config import Settings
+        s = Settings(XAI_API_KEY="x", POLYMARKET_API_KEY="y", DISABLED_MARKET_TYPES="")
+        assert s.disabled_market_types_set == set()
+
+    def test_single_value(self):
+        from src.config import Settings
+        s = Settings(XAI_API_KEY="x", POLYMARKET_API_KEY="y", DISABLED_MARKET_TYPES="sports")
+        assert s.disabled_market_types_set == {"sports"}
+
+    def test_multiple_values_with_spaces(self):
+        from src.config import Settings
+        s = Settings(
+            XAI_API_KEY="x", POLYMARKET_API_KEY="y",
+            DISABLED_MARKET_TYPES="sports, crypto_15m, weather"
+        )
+        assert s.disabled_market_types_set == {"sports", "crypto_15m", "weather"}

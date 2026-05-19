@@ -670,3 +670,51 @@ class TestPriceRangeFilter:
         assert len(markets) == 1
         assert markets[0].market_id == "normal-price"
         assert markets[0].yes_price == pytest.approx(0.55)
+
+
+# ---------------------------------------------------------------------------
+# F2 Tests: MIN_HOURS_TO_RESOLUTION env var filter
+# ---------------------------------------------------------------------------
+
+
+class TestMinHoursToResolutionFilter:
+    """get_active_markets uses settings.MIN_HOURS_TO_RESOLUTION instead of hardcoded 0.25."""
+
+    @pytest.mark.asyncio
+    async def test_filters_short_resolution_by_env_var(self):
+        """MIN_HOURS_TO_RESOLUTION=0.5: market at 0.4h filtered out, market at 0.6h kept."""
+        settings = Settings(
+            XAI_API_KEY="test-key",
+            POLYMARKET_API_KEY="test-pm-key",
+            MIN_HOURS_TO_RESOLUTION=0.5,
+            MIN_TRADEABLE_PRICE=0.05,
+            MAX_TRADEABLE_PRICE=0.95,
+        )
+        client = PolymarketClient(settings)
+
+        raw = [
+            _make_raw_market(
+                id="market-short",
+                question="Will BTC move in 24 minutes?",
+                hours_ahead=0.4,
+                liquidity=10_000,
+            ),
+            _make_raw_market(
+                id="market-ok",
+                question="Will BTC move in 36 minutes?",
+                hours_ahead=0.6,
+                liquidity=10_000,
+            ),
+        ]
+        mock_resp = _mock_response(json_data=raw)
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_resp)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
+            markets = await client.get_active_markets(tier=1)
+
+        ids = [m.market_id for m in markets]
+        assert "market-short" not in ids, "market at 0.4h should be filtered with threshold 0.5h"
+        assert "market-ok" in ids, "market at 0.6h should pass with threshold 0.5h"

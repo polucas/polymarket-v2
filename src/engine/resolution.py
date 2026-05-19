@@ -91,60 +91,61 @@ async def auto_resolve_trades(db: Database, polymarket_client) -> List[TradeReco
             else:
                 outcome = market.resolution == "YES"
 
-            # Calculate PnL
-            pnl = calculate_pnl(trade, outcome)
+            already_exited = trade.exit_type is not None
 
-            # Calculate Brier scores
             actual_val = 1.0 if outcome else 0.0
             brier_raw = (trade.grok_raw_probability - actual_val) ** 2
             brier_adjusted = (trade.final_adjusted_probability - actual_val) ** 2
 
-            # Update trade record
             trade.actual_outcome = outcome
-            trade.pnl = pnl
             trade.brier_score_raw = brier_raw
             trade.brier_score_adjusted = brier_adjusted
             trade.resolved_at = Clock.utcnow()
-            # Dual-label: also write pnl-based label for consistency
-            trade.trade_profitable = 1 if trade.pnl > 0 else 0
-            predicted_raw = (
-                trade.grok_raw_probability if trade.action == "BUY_YES"
-                else 1 - trade.grok_raw_probability
-            )
-            trade.pnl_brier_raw = (predicted_raw - trade.trade_profitable) ** 2
-            predicted_adj = (
-                trade.final_adjusted_probability if trade.action == "BUY_YES"
-                else 1 - trade.final_adjusted_probability
-            )
-            trade.pnl_brier_adjusted = (predicted_adj - trade.trade_profitable) ** 2
+
+            if not already_exited:
+                pnl = calculate_pnl(trade, outcome)
+                trade.pnl = pnl
+                trade.trade_profitable = 1 if pnl > 0 else 0
+                predicted_raw = (
+                    trade.grok_raw_probability if trade.action == "BUY_YES"
+                    else 1 - trade.grok_raw_probability
+                )
+                trade.pnl_brier_raw = (predicted_raw - trade.trade_profitable) ** 2
+                predicted_adj = (
+                    trade.final_adjusted_probability if trade.action == "BUY_YES"
+                    else 1 - trade.final_adjusted_probability
+                )
+                trade.pnl_brier_adjusted = (predicted_adj - trade.trade_profitable) ** 2
 
             await db.update_trade(trade)
 
-            # Update portfolio
-            portfolio.total_pnl += pnl
-            portfolio.cash_balance += trade.position_size_usd + pnl
-            portfolio.total_equity = portfolio.cash_balance + sum(
-                p.current_value for p in portfolio.open_positions
-                if p.market_id != trade.market_id
-            )
-            portfolio.open_positions = [
-                p for p in portfolio.open_positions if p.market_id != trade.market_id
-            ]
-            if portfolio.total_equity > portfolio.peak_equity:
-                portfolio.peak_equity = portfolio.total_equity
-            drawdown = (portfolio.peak_equity - portfolio.total_equity) / portfolio.peak_equity if portfolio.peak_equity > 0 else 0
-            portfolio.max_drawdown = max(portfolio.max_drawdown, drawdown)
+            if not already_exited:
+                portfolio.total_pnl += pnl
+                portfolio.cash_balance += trade.position_size_usd + pnl
+                portfolio.total_equity = portfolio.cash_balance + sum(
+                    p.current_value for p in portfolio.open_positions
+                    if p.market_id != trade.market_id
+                )
+                portfolio.open_positions = [
+                    p for p in portfolio.open_positions if p.market_id != trade.market_id
+                ]
+                if portfolio.total_equity > portfolio.peak_equity:
+                    portfolio.peak_equity = portfolio.total_equity
+                drawdown = (portfolio.peak_equity - portfolio.total_equity) / portfolio.peak_equity if portfolio.peak_equity > 0 else 0
+                portfolio.max_drawdown = max(portfolio.max_drawdown, drawdown)
+                await db.save_portfolio(portfolio)
 
-            await db.save_portfolio(portfolio)
             resolved_count += 1
             newly_resolved.append(trade)
 
+            log_pnl = pnl if not already_exited else trade.pnl
             log.info("trade_resolved",
                      market_id=trade.market_id,
                      outcome="YES" if outcome else "NO",
-                     pnl=pnl,
+                     pnl=log_pnl,
                      brier_raw=brier_raw,
-                     brier_adjusted=brier_adjusted)
+                     brier_adjusted=brier_adjusted,
+                     already_exited=already_exited)
 
         except Exception as e:
             log.error("resolution_error", market_id=trade.market_id, error=str(e))

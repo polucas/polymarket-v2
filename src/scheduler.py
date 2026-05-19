@@ -76,6 +76,7 @@ class Scheduler:
         self._tier2_last_signal: Optional[datetime] = None
         self._observe_only_alerted_today: bool = False
         self._observe_only_alert_date: Optional[str] = None
+        self.ws_exit_mgr = None
 
     def start(self) -> None:
         self._scheduler.add_job(
@@ -91,6 +92,14 @@ class Scheduler:
             minutes=5,
             id="auto_resolve",
             max_instances=1,
+        )
+        self._scheduler.add_job(
+            self._fast_exit_check,
+            "interval",
+            seconds=self._settings.FAST_EXIT_POLL_INTERVAL_SECONDS,
+            id="fast_exit_check",
+            max_instances=1,
+            coalesce=True,
         )
         self._scheduler.add_job(
             self._update_adverse,
@@ -157,6 +166,16 @@ class Scheduler:
         except Exception as e:
             log.error("auto_resolve_error", error=str(e))
             await send_alert(format_error_alert(f"Auto-resolve failed: {e}"), self._settings)
+
+    async def _fast_exit_check(self) -> None:
+        """Fallback poll when WS is disconnected. No-op when WS healthy."""
+        if self.ws_exit_mgr is None or self.ws_exit_mgr._connected:
+            return
+        try:
+            from src.engine.resolution import check_early_exits
+            await check_early_exits(self._db, self._polymarket, self._settings)
+        except Exception as e:
+            log.error("fast_exit_check_error", error=str(e))
 
     async def _update_adverse(self) -> None:
         try:
@@ -480,6 +499,13 @@ class Scheduler:
                     await self._db.save_trade(skip_record)
                     return
 
+        # Check if market type disabled by env var
+        if market.market_type in self._settings.disabled_market_types_set:
+            log.info("market_type_disabled_env", market_type=market.market_type)
+            skip_record = self._build_skip_record(market, "market_type_disabled_env", experiment_run, tier)
+            await self._db.save_trade(skip_record)
+            return
+
         # Check if market type disabled by learning
         if self._market_type_mgr.should_disable(market.market_type):
             log.info("market_type_disabled", market_type=market.market_type)
@@ -517,7 +543,10 @@ class Scheduler:
             # prescreen_result is None (LLM failed) → fall through to full eval
 
         # Fetch Twitter signals (only for markets that passed pre-screen)
-        twitter_signals = await self._twitter.get_signals_for_market(keywords)
+        if self._settings.TWITTER_ENABLED:
+            twitter_signals = await self._twitter.get_signals_for_market(keywords) or []
+        else:
+            twitter_signals = []
 
         # Update tier2 last signal time if crypto signals found
         if tier == 2 and (twitter_signals or relevant_rss):
