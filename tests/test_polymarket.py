@@ -442,10 +442,10 @@ class TestPlaceOrder:
 
 class TestPagination:
     def test_default_pagination_settings(self):
-        """Pagination defaults: page_size=500, pages=2."""
+        """Pagination defaults: page_size=100 (matches Gamma API cap), pages=10 → 1000 markets/scan."""
         settings = _make_settings()
-        assert settings.MARKET_PAGE_SIZE == 500
-        assert settings.MARKET_FETCH_PAGES == 2
+        assert settings.MARKET_PAGE_SIZE == 100
+        assert settings.MARKET_FETCH_PAGES == 10
         # Backward compat
         assert settings.MARKET_FETCH_LIMIT == 200
 

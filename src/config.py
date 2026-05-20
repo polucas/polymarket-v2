@@ -36,8 +36,8 @@ class Settings(BaseSettings):
     TIER1_DAILY_CAP: int = 20
     TIER1_FEE_RATE: float = 0.0
     MARKET_FETCH_LIMIT: int = 200
-    MARKET_PAGE_SIZE: int = 500          # Markets per API page
-    MARKET_FETCH_PAGES: int = 2          # Number of pages to fetch
+    MARKET_PAGE_SIZE: int = 100          # Markets per API page (Polymarket Gamma caps at 100, larger values silently truncated)
+    MARKET_FETCH_PAGES: int = 10         # Number of offset-paginated pages to fetch (100 * 10 = 1000 markets/scan)
     TIER1_EXECUTION_TYPE: str = "maker"
 
     # Tier 2 Config

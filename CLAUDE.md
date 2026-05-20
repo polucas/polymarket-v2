@@ -122,7 +122,7 @@ docs/
 - **Bankroll:** $10,000 (set in `config.py` INITIAL_BANKROLL). Max bet $160 via `MAX_POSITION_PCT=0.016` applied to live `portfolio.total_equity`.
 - **Tier 1:** 15-min scan interval, resolution 15min-7d, 20 trades/day cap, 0% fee, 3% min edge
 - **Tier 2:** 2-3 min scan (only during active news window), 15-min resolution, 3 trades/day cap
-- **Market fetch:** 2 pages x 500 markets sorted by volume (`MARKET_PAGE_SIZE=500`, `MARKET_FETCH_PAGES=2`) = up to 1,000 most active markets per scan
+- **Market fetch:** 10 pages × 100 markets sorted by volume (`MARKET_PAGE_SIZE=100`, `MARKET_FETCH_PAGES=10`) = up to 1,000 most active markets per scan. Note: Polymarket Gamma API silently caps `limit` at 100 per request — anything larger is truncated. Keep `MARKET_PAGE_SIZE` ≤ 100 and scale total fetch via `MARKET_FETCH_PAGES` (offset-based pagination). Code-level early-break at `polymarket.py:57` (`if len(page_markets) < page_size: break`) means an oversized `MARKET_PAGE_SIZE` will terminate the loop after page 1, fetching only 100 markets total.
 - **Pre-screen gate:** `PRESCREEN_ENABLED=true`, `PRESCREEN_MIN_EDGE=0.05`, `PRESCREEN_MIN_CONFIDENCE=0.25`, `PRESCREEN_MAX_TOKENS=1500` (VPS) / `500` (default) — cheap LLM check before Twitter fetch; filters ~25-40% of markets. Round 5 (2026-04-20): output validated by `PrescreenResult` pydantic schema; MiniMax called with `response_format={"type":"json_object"}` for structured output; two-stage parse falls back to `parse_json_safe()` for legacy `<think>`-wrapped responses.
 - **Price filter:** Skip markets outside 5%-95% YES range (`MIN_TRADEABLE_PRICE=0.05`, `MAX_TRADEABLE_PRICE=0.95`)
 - **API budget:** $15/day (`DAILY_API_BUDGET_USD=15.0`)

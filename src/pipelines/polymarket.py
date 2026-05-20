@@ -33,6 +33,10 @@ class PolymarketClient:
         Tier 1: resolution 15m-7d, liquidity > $5K
         Tier 2: crypto markets, 15-min resolution
         """
+        # Polymarket Gamma API hard-caps `limit` at 100 per request — anything
+        # larger is silently truncated to 100. To fetch more than 100 markets
+        # we must paginate via `offset`. Keep MARKET_PAGE_SIZE <= 100 and bump
+        # MARKET_FETCH_PAGES to scale total fetch (e.g. 100 * 10 = 1000).
         all_raw = []
         page_size = self._settings.MARKET_PAGE_SIZE
         try:
