@@ -7,7 +7,7 @@ _Last updated: 2026-05-20 — Phase A acceleration active. DB reset clean. Bug 5
 - **Mode:** paper, `ENVIRONMENT=paper`
 - **DB:** fresh as of 2026-05-19 (full wipe, schema v7, $10K bankroll)
 - **Phase A loosened gates active (2026-05-20):**
-  - `DISABLED_MARKET_TYPES=sports` (economic re-enabled after Bug 5/6 round)
+  - `DISABLED_MARKET_TYPES=sports,esports` (economic re-enabled after Bug 5/6 round; esports added 2026-05-20 as conceptually equivalent to sports)
   - `PRESCREEN_MIN_EDGE=0.025` (was 0.05)
   - `PRESCREEN_MIN_CONFIDENCE=0.25` (was 0.30)
   - `MIN_HOURS_TO_RESOLUTION=0.25` (was 0.5)
