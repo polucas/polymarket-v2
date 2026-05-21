@@ -158,10 +158,16 @@ async def lifespan(app: FastAPI):
         market_type_mgr=market_type_mgr,
         signal_tracker_mgr=signal_tracker_mgr,
     )
-    scheduler.start()
 
-    # Real-time WebSocket exit manager
+    # Real-time WebSocket exit manager — create BEFORE scheduler.start() so the
+    # scheduler can call ws_exit_mgr.add_position() immediately after trade
+    # execution (Bug 7a) and _fast_exit_check can read ws_exit_mgr._connected
+    # (Bug 6a). Without this wiring, both guards default to None and the code
+    # paths are silently dead.
     ws_exit_mgr = RealTimeExitManager(db=db, polymarket_client=polymarket, settings=settings)
+    scheduler.ws_exit_mgr = ws_exit_mgr
+
+    scheduler.start()
     await ws_exit_mgr.start()
 
     await db.init_portfolio_if_missing(settings.INITIAL_BANKROLL)
