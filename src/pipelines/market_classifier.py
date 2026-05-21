@@ -24,13 +24,31 @@ MARKET_TYPE_KEYWORDS: dict[str, list[str]] = {
         "counter-strike", "cs:go", "cs2", "honor of kings", "starcraft",
         "overwatch", "fortnite", "apex legends", "rocket league", "worlds",
     ],
-    # geopolitical before weather: "ukraine" contains "rain" as a substring;
-    # country/region keywords must be checked before the bare weather terms.
+    # IMPORTANT: order matters — first match wins, substring-based.
+    # - geopolitical before weather: "ukraine" contains "rain" as a substring
+    # - sports before weather/regulatory: NHL team "Hurricanes" contains "hurricane",
+    #   football team "Baník" contains "ban" — both must be classified as sports
+    # - esports must still come BEFORE sports (LoL / dota / valorant patterns are esports-specific)
     "geopolitical": [
         "war", "ceasefire", "treaty", "sanction", "sanctions", "invasion",
         "border", "nato", "united nations", "un security council",
         "russia", "ukraine", "china", "taiwan", "israel", "gaza", "iran",
         "north korea", "peace deal", "diplomacy",
+    ],
+    "sports": [
+        # Leagues and sports
+        "nba", "nfl", "mlb", "nhl", "epl", "ucl", "ufc", "mma", "tennis",
+        "soccer", "football", "basketball", "baseball", "hockey", "golf",
+        "championship", "super bowl", "world cup", "liga mx", "serie a",
+        "premier league", "bundesliga", "la liga", "champions league",
+        "playoff", "playoffs",
+        # Game / match patterns
+        "vs.", "vs ", " vs", "o/u", "over/under", "over under", "spread",
+        "moneyline", "first half", "halftime",
+        # Common scoring terms
+        "goals", "points spread", "total goals", "total points",
+        # Team win patterns ("Will X FC win", "Will X win on 2026-")
+        " win on 20", "fc win", " win on april", " win on may",
     ],
     "weather": [
         "temperature", "weather", "snowfall", "rainfall", "hurricane",
@@ -54,21 +72,6 @@ MARKET_TYPE_KEYWORDS: dict[str, list[str]] = {
         "president", "election", "congress", "senate", "vote", "political",
         "trump", "biden", "governor", "democrat", "republican", "primary",
         "campaign", "ballot", "referendum", "redistricting",
-    ],
-    "sports": [
-        # Leagues and sports
-        "nba", "nfl", "mlb", "nhl", "epl", "ucl", "ufc", "mma", "tennis",
-        "soccer", "football", "basketball", "baseball", "hockey", "golf",
-        "championship", "super bowl", "world cup", "liga mx", "serie a",
-        "premier league", "bundesliga", "la liga", "champions league",
-        "playoff", "playoffs",
-        # Game / match patterns
-        "vs.", "vs ", " vs", "o/u", "over/under", "over under", "spread",
-        "moneyline", "first half", "halftime",
-        # Common scoring terms
-        "goals", "points spread", "total goals", "total points",
-        # Team win patterns ("Will X FC win", "Will X win on 2026-")
-        " win on 20", "fc win", " win on april", " win on may",
     ],
     "cultural": [
         "oscar", "grammy", "emmy", "movie", "album", "show", "celebrity",

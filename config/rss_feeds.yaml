@@ -23,3 +23,15 @@ feeds:
   cointelegraph:
     url: "https://cointelegraph.com/rss"
     domain: "cointelegraph.com"
+  politico:
+    url: "https://www.politico.com/rss/politicopicks.xml"
+    domain: "politico.com"
+  thehill:
+    url: "https://thehill.com/rss/syndicator/19109"
+    domain: "thehill.com"
+  espn:
+    url: "https://www.espn.com/espn/rss/news"
+    domain: "espn.com"
+  techcrunch:
+    url: "https://techcrunch.com/feed/"
+    domain: "techcrunch.com"

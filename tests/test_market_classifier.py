@@ -24,7 +24,7 @@ from src.pipelines.market_classifier import classify_market_type, MARKET_TYPE_KE
         ("LoL: Sentinels vs Disguised - Game 2 Winner", "esports"),
         ("Honor of Kings: AG Super Play vs Qing Jiu Club - Game 3 Winner", "esports"),
         ("Valorant Champions: LOUD vs NRG Game 1", "esports"),
-        # weather (must come before sports — "rain" should not fall to sports)
+        # weather (sports is now before weather, but actual weather terms still route correctly)
         ("Will a cozy rain occur on Friday?", "weather"),
         ("Will the highest temperature in Chicago be between 6-7°F on January 15?", "weather"),
         ("Will there be a hurricane landfall this week?", "weather"),
@@ -98,7 +98,7 @@ def test_war_is_geopolitical_not_political() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Ordering-sensitive: weather before sports
+# Ordering-sensitive: sports before weather (post-reorder)
 # ---------------------------------------------------------------------------
 
 def test_rain_is_weather_not_unknown() -> None:
@@ -162,12 +162,13 @@ def test_all_expected_types_present() -> None:
 
 
 def test_iteration_order() -> None:
-    """esports must precede sports, geopolitical must precede both weather and political."""
+    """esports must precede sports, geopolitical must precede both weather and political,
+    sports must now precede weather (reordered so Hurricanes/Baník route to sports)."""
     keys = list(MARKET_TYPE_KEYWORDS.keys())
     assert keys.index("esports") < keys.index("sports"), "esports must come before sports"
     assert keys.index("geopolitical") < keys.index("political"), "geopolitical must come before political"
     assert keys.index("geopolitical") < keys.index("weather"), "geopolitical must come before weather (ukraine contains 'rain')"
-    assert keys.index("weather") < keys.index("sports"), "weather must come before sports"
+    assert keys.index("sports") < keys.index("weather"), "sports must come before weather (hurricanes/ban substrings)"
     assert keys.index("crypto_15m") < keys.index("political"), "crypto_15m must come before political"
 
 
@@ -189,3 +190,39 @@ def test_get_min_edge_political():
 
 def test_get_min_edge_unknown_uses_default():
     assert get_min_edge("unknown", default=0.08) == 0.08
+
+
+# ---------------------------------------------------------------------------
+# F4: sports-before-weather reorder — substring collision regressions
+# ---------------------------------------------------------------------------
+
+def test_nhl_team_with_weather_substring() -> None:
+    """NHL Hurricanes contains 'hurricane' substring; must classify as sports not weather."""
+    assert classify_market_type("Canadiens vs. Hurricanes") == "sports"
+    assert classify_market_type("Will Carolina Hurricanes win on 2026-06-01?") == "sports"
+
+
+def test_football_team_with_regulatory_substring() -> None:
+    """Football team 'Baník' contains 'ban' substring; must classify as sports not regulatory."""
+    assert classify_market_type("Will FC Baník Ostrava win on 2026-05-23?") == "sports"
+
+
+def test_iteration_order_sports_before_weather() -> None:
+    """After reorder, sports must be checked BEFORE weather/regulatory so team
+    names containing 'hurricane' / 'ban' are routed correctly."""
+    keys = list(MARKET_TYPE_KEYWORDS.keys())
+    assert keys.index("sports") < keys.index("weather")
+    assert keys.index("sports") < keys.index("regulatory")
+    assert keys.index("esports") < keys.index("sports")  # esports specificity preserved
+    assert keys.index("geopolitical") < keys.index("weather")  # original ukraine-rain protection preserved
+
+
+def test_rain_market_still_weather() -> None:
+    """Regression: actual weather markets still route to weather."""
+    assert classify_market_type("Will it rain in Madrid on May 25?") == "weather"
+    assert classify_market_type("Temperature in NYC above 90F by July?") == "weather"
+
+
+def test_ukraine_still_geopolitical() -> None:
+    """Regression: ukraine-substring protection still works (geopolitical before weather AND sports)."""
+    assert classify_market_type("Will Ukraine ceasefire by June 1?") == "geopolitical"
