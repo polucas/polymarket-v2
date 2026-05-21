@@ -95,6 +95,22 @@ class RealTimeExitManager:
             if t.clob_token_id_yes:
                 self._active_positions[t.clob_token_id_yes] = t
 
+    async def add_position(self, trade: TradeRecord) -> None:
+        """Register a newly-opened position immediately, bypassing the 60s refresh interval.
+        Called by scheduler right after execute_trade() returns a record. Without this,
+        WS doesn't see the new position until the next refresh cycle, leaving a window
+        where price can move adversely with no exit monitoring (Bug 7a)."""
+        if trade is None or trade.exit_type is not None:
+            return
+        if not trade.clob_token_id_yes:
+            return
+        self._active_positions[trade.clob_token_id_yes] = trade
+        log.info(
+            "ws_position_added",
+            market_id=trade.market_id,
+            token_id=trade.clob_token_id_yes,
+        )
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
@@ -207,7 +223,23 @@ class RealTimeExitManager:
 
             try:
                 best_bid = float(bids[0]["price"]) if isinstance(bids[0], dict) else float(bids[0])
+                best_bid_size = float(bids[0].get("size", "0")) if isinstance(bids[0], dict) else 0.0
             except (ValueError, IndexError, KeyError, TypeError):
+                continue
+
+            # Bug 7b: skip exit when best-bid liquidity is too thin to be a real price.
+            # Flash empty-book or 1-share dust orders should not trigger SL/TP.
+            best_bid_usd = best_bid * best_bid_size
+            if best_bid_usd < self.settings.MIN_BID_LIQUIDITY_USD:
+                log.warning(
+                    "ws_thin_book_skip",
+                    market_id=trade.market_id,
+                    asset_id=asset_id,
+                    best_bid=best_bid,
+                    best_bid_size=best_bid_size,
+                    best_bid_usd=best_bid_usd,
+                    threshold=self.settings.MIN_BID_LIQUIDITY_USD,
+                )
                 continue
 
             # Use best_bid as current YES price for ROI calculation

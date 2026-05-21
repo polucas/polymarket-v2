@@ -72,6 +72,7 @@ def _build_manager(trades=None, portfolio=None):
     settings.ENVIRONMENT = "paper"
     settings.TELEGRAM_BOT_TOKEN = ""
     settings.TELEGRAM_CHAT_ID = ""
+    settings.MIN_BID_LIQUIDITY_USD = 5.0
 
     mgr = RealTimeExitManager(db=db, polymarket_client=polymarket, settings=settings)
     return mgr
@@ -529,6 +530,110 @@ class TestDualLabelWrites:
         assert updated.pnl_brier_adjusted is not None
         assert 0.0 <= updated.pnl_brier_raw <= 1.0
         assert 0.0 <= updated.pnl_brier_adjusted <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# F3 Tests: add_position
+# ---------------------------------------------------------------------------
+
+
+class TestAddPosition:
+    @pytest.mark.asyncio
+    async def test_add_position_registers_immediately(self):
+        """Trade with exit_type=None and valid token is added immediately."""
+        mgr = _build_manager()
+        trade = _make_trade(clob_token_id_yes="tok-1")
+        trade.exit_type = None
+
+        await mgr.add_position(trade)
+
+        assert "tok-1" in mgr._active_positions
+        assert mgr._active_positions["tok-1"] is trade
+
+    @pytest.mark.asyncio
+    async def test_add_position_skips_already_exited(self):
+        """Trade with exit_type set is not added to active positions."""
+        mgr = _build_manager()
+        trade = _make_trade(clob_token_id_yes="tok-2")
+        trade.exit_type = "stop_loss"
+
+        await mgr.add_position(trade)
+
+        assert "tok-2" not in mgr._active_positions
+
+    @pytest.mark.asyncio
+    async def test_add_position_skips_no_token(self):
+        """Trade with empty clob_token_id_yes is not added."""
+        mgr = _build_manager()
+        trade = _make_trade(clob_token_id_yes="")
+        trade.exit_type = None
+
+        await mgr.add_position(trade)
+
+        assert len(mgr._active_positions) == 0
+
+
+# ---------------------------------------------------------------------------
+# F3 Tests: thin-book skip guard
+# ---------------------------------------------------------------------------
+
+
+class TestThinBookSkip:
+    @pytest.mark.asyncio
+    async def test_skip_exit_on_thin_book(self):
+        """WS book message with liquidity below MIN_BID_LIQUIDITY_USD should NOT fire exit."""
+        trade = _make_trade(entry_price=0.50, position_size=100.0)
+        trade.exit_type = None
+        mgr = _build_manager()
+        mgr.settings.MIN_BID_LIQUIDITY_USD = 5.0
+        mgr.settings.STOP_LOSS_ROI = -0.15
+        mgr._active_positions = {trade.clob_token_id_yes: trade}
+
+        # best_bid=0.30 (ROI -40%, SL trigger level) but size=1 → $0.30 liquidity < $5.00
+        ws_message = [{
+            "event_type": "book",
+            "asset_id": trade.clob_token_id_yes,
+            "bids": [{"price": "0.30", "size": "1"}],
+            "asks": [],
+        }]
+
+        import structlog.testing
+        with structlog.testing.capture_logs() as cap_logs:
+            await mgr._handle_message(ws_message)
+
+        # No exit should fire
+        mgr.db.update_trade.assert_not_called()
+
+        # ws_thin_book_skip warning should be logged
+        skip_events = [e for e in cap_logs if e.get("event") == "ws_thin_book_skip"]
+        assert skip_events, f"Expected ws_thin_book_skip in logs, got: {cap_logs}"
+
+    @pytest.mark.asyncio
+    async def test_exit_fires_when_book_thick_enough(self):
+        """WS book message with liquidity above MIN_BID_LIQUIDITY_USD should fire SL exit."""
+        trade = _make_trade(entry_price=0.50, position_size=100.0)
+        trade.exit_type = None
+        portfolio = _make_portfolio()
+        mgr = _build_manager(portfolio=portfolio)
+        mgr.settings.MIN_BID_LIQUIDITY_USD = 5.0
+        mgr.settings.STOP_LOSS_ROI = -0.15
+        mgr.settings.TAKE_PROFIT_ROI = 0.20
+        mgr._active_positions = {trade.clob_token_id_yes: trade}
+
+        # best_bid=0.30, size=50 → $15.00 liquidity > $5.00 threshold; ROI = -40% → SL
+        ws_message = [{
+            "event_type": "book",
+            "asset_id": trade.clob_token_id_yes,
+            "bids": [{"price": "0.30", "size": "50"}],
+            "asks": [],
+        }]
+
+        with patch("src.engine.ws_exit.send_alert", new_callable=AsyncMock):
+            await mgr._handle_message(ws_message)
+
+        mgr.db.update_trade.assert_called_once()
+        updated = mgr.db.update_trade.call_args[0][0]
+        assert updated.exit_type == "stop_loss"
 
 
 # ---------------------------------------------------------------------------

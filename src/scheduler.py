@@ -323,6 +323,8 @@ class Scheduler:
                         model_used=self._settings.LLM_MODEL,
                     )
                     if record:
+                        if self.ws_exit_mgr is not None:
+                            await self.ws_exit_mgr.add_position(record)
                         today_trades.append(record)
                         await send_alert(
                             format_trade_alert(record), self._settings
@@ -425,6 +427,8 @@ class Scheduler:
                         model_used=self._settings.LLM_MODEL,
                     )
                     if record:
+                        if self.ws_exit_mgr is not None:
+                            await self.ws_exit_mgr.add_position(record)
                         today_trades.append(record)
                         await send_alert(
                             format_trade_alert(record), self._settings

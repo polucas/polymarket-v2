@@ -763,3 +763,138 @@ class TestDisabledMarketTypesSetProperty:
             DISABLED_MARKET_TYPES="sports, crypto_15m, weather"
         )
         assert s.disabled_market_types_set == {"sports", "crypto_15m", "weather"}
+
+
+# ---------------------------------------------------------------------------
+# F3 Tests: ws_exit_mgr.add_position called after execute_trade
+# ---------------------------------------------------------------------------
+
+
+def _make_stub_trade_record():
+    from src.models import TradeRecord
+    from datetime import datetime, timezone
+    return TradeRecord(
+        record_id="stub-rec",
+        experiment_run="exp-001",
+        timestamp=datetime.now(timezone.utc),
+        model_used="MiniMax-M2.7",
+        market_id="mkt-stub",
+        market_question="Will Y happen?",
+        market_type="political",
+        resolution_window_hours=24.0,
+        tier=1,
+        grok_raw_probability=0.70,
+        grok_raw_confidence=0.80,
+        grok_reasoning="strong signals",
+        grok_signal_types=[],
+        action="BUY_YES",
+        market_price_at_decision=0.45,
+        position_size_usd=50.0,
+    )
+
+
+def _make_stub_candidate():
+    from src.models import TradeCandidate
+    market = _make_market()
+    return TradeCandidate(
+        market=market,
+        adjusted_probability=0.70,
+        adjusted_confidence=0.80,
+        calculated_edge=0.25,
+        position_size=50.0,
+        side="BUY_YES",
+        resolution_hours=24.0,
+        tier=1,
+        grok_raw_probability=0.70,
+        grok_raw_confidence=0.80,
+        grok_reasoning="strong signals",
+        execution_type="maker",
+    )
+
+
+class TestAddPositionCalledAfterTradeExecution:
+    """After execute_trade() returns a record, ws_exit_mgr.add_position must be called."""
+
+    @pytest.mark.asyncio
+    async def test_add_position_called_when_record_returned(self):
+        """If execute_trade returns a stub record, ws_exit_mgr.add_position is called once.
+
+        Drives run_tier1_scan with all heavy machinery mocked out. _process_market
+        is patched to inject one candidate directly. select_best_trades returns that
+        candidate. check_monk_mode allows it. execute_trade returns a stub record.
+        The branch 'if record: ws_exit_mgr.add_position(record)' is exercised.
+        """
+        scheduler = _build_scheduler()
+
+        ws_exit_mgr = MagicMock()
+        ws_exit_mgr.add_position = AsyncMock()
+        scheduler.ws_exit_mgr = ws_exit_mgr
+
+        stub_record = _make_stub_trade_record()
+        stub_candidate = _make_stub_candidate()
+
+        portfolio = Portfolio()
+        scheduler._db.get_today_trades.return_value = []
+        scheduler._db.get_week_trades.return_value = []
+        scheduler._db.get_today_api_spend.return_value = 0.0
+        scheduler._db.load_portfolio.return_value = portfolio
+        scheduler._db.get_open_market_ids.return_value = set()
+        scheduler._db.get_recently_traded_market_ids.return_value = set()
+        scheduler._db.get_recently_evaluated_market_ids.return_value = set()
+        scheduler._db.get_recent_market_questions.return_value = []
+        scheduler._polymarket.get_active_markets.return_value = [_make_market()]
+        # consume_signals is sync; override on AsyncMock to return a plain list
+        scheduler._rss.consume_signals = MagicMock(return_value=[])
+
+        # _process_market injects the stub candidate into the shared candidates list
+        async def fake_process_market(*, candidates, **kwargs):
+            candidates.append(stub_candidate)
+
+        with patch.object(scheduler, "_process_market", side_effect=fake_process_market), \
+             patch("src.scheduler.select_best_trades", return_value=([stub_candidate], [])), \
+             patch("src.scheduler.check_monk_mode", return_value=(True, "ok")), \
+             patch("src.scheduler.execute_trade", new_callable=AsyncMock, return_value=stub_record), \
+             patch("src.scheduler.send_alert", new_callable=AsyncMock), \
+             patch("src.scheduler.get_current_experiment", new_callable=AsyncMock, return_value=None), \
+             patch("src.scheduler.get_scan_mode", return_value="normal"):
+            await scheduler.run_tier1_scan()
+
+        ws_exit_mgr.add_position.assert_called_once_with(stub_record)
+
+    @pytest.mark.asyncio
+    async def test_add_position_not_called_when_no_record(self):
+        """If execute_trade returns None, ws_exit_mgr.add_position must NOT be called."""
+        scheduler = _build_scheduler()
+
+        ws_exit_mgr = MagicMock()
+        ws_exit_mgr.add_position = AsyncMock()
+        scheduler.ws_exit_mgr = ws_exit_mgr
+
+        stub_candidate = _make_stub_candidate()
+
+        portfolio = Portfolio()
+        scheduler._db.get_today_trades.return_value = []
+        scheduler._db.get_week_trades.return_value = []
+        scheduler._db.get_today_api_spend.return_value = 0.0
+        scheduler._db.load_portfolio.return_value = portfolio
+        scheduler._db.get_open_market_ids.return_value = set()
+        scheduler._db.get_recently_traded_market_ids.return_value = set()
+        scheduler._db.get_recently_evaluated_market_ids.return_value = set()
+        scheduler._db.get_recent_market_questions.return_value = []
+        scheduler._polymarket.get_active_markets.return_value = [_make_market()]
+        # consume_signals is sync; override on AsyncMock to return a plain list
+        scheduler._rss.consume_signals = MagicMock(return_value=[])
+
+        async def fake_process_market(*, candidates, **kwargs):
+            candidates.append(stub_candidate)
+
+        with patch.object(scheduler, "_process_market", side_effect=fake_process_market), \
+             patch("src.scheduler.select_best_trades", return_value=([stub_candidate], [])), \
+             patch("src.scheduler.check_monk_mode", return_value=(True, "ok")), \
+             patch("src.scheduler.execute_trade", new_callable=AsyncMock, return_value=None), \
+             patch("src.scheduler.send_alert", new_callable=AsyncMock), \
+             patch("src.scheduler.get_current_experiment", new_callable=AsyncMock, return_value=None), \
+             patch("src.scheduler.get_scan_mode", return_value="normal"):
+            await scheduler.run_tier1_scan()
+
+        ws_exit_mgr.add_position.assert_not_called()

@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     EARLY_EXIT_ENABLED: bool = True
     FAST_EXIT_POLL_INTERVAL_SECONDS: int = 60
     WS_HEARTBEAT_SECONDS: int = 10
+    MIN_BID_LIQUIDITY_USD: float = 5.0  # Skip WS exit if best-bid liquidity below this (Bug 7b — flash empty-book guard)
 
     # Monk Mode
     DAILY_LOSS_LIMIT_PCT: float = 0.05
