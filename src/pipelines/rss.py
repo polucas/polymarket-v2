@@ -45,7 +45,12 @@ def _parse_date(date_str: str) -> datetime | None:
 
 
 class RSSPipeline:
-    def __init__(self):
+    def __init__(self, settings=None):
+        """settings is optional; if None, RSS_MAX_AGE_HOURS=12 and RSS_ENTRIES_PER_FEED=25 are used as defaults."""
+        if settings is None:
+            from src.config import get_settings
+            settings = get_settings()
+        self.settings = settings
         self.seen_headlines: Dict[str, datetime] = {}
         self._feeds = _load_feed_config()
         self._cached_signals: List[Signal] = []
@@ -67,8 +72,8 @@ class RSSPipeline:
             for sig in new_signals:
                 if sig.content not in cached_contents:
                     self._cached_signals.append(sig)
-            # Prune signals older than 2 hours
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+            # Prune signals older than RSS_MAX_AGE_HOURS
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=self.settings.RSS_MAX_AGE_HOURS)
             self._cached_signals = [s for s in self._cached_signals if s.timestamp > cutoff]
 
     def consume_signals(self) -> List[Signal]:
@@ -85,15 +90,15 @@ class RSSPipeline:
         for feed_name, cfg in self._feeds.items():
             try:
                 feed = feedparser.parse(cfg["url"])
-                for entry in feed.entries[:10]:
+                for entry in feed.entries[:self.settings.RSS_ENTRIES_PER_FEED]:
                     headline = entry.title.strip()
                     if headline in self.seen_headlines:
                         continue
                     self.seen_headlines[headline] = now
 
                     published = _parse_date(entry.get("published", ""))
-                    if published and (now - published).total_seconds() > 7200:
-                        continue  # Older than 2 hours
+                    if published and (now - published).total_seconds() > self.settings.RSS_MAX_AGE_HOURS * 3600:
+                        continue  # Older than RSS_MAX_AGE_HOURS
 
                     source_tier = classify_source_tier({
                         "source_type": "rss",

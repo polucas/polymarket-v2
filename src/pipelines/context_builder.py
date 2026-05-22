@@ -14,9 +14,10 @@ log = structlog.get_logger()
 _keyword_cache: Dict[str, List[str]] = {}
 
 ENTITY_PATTERNS = [
-    re.compile(r'\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)+\b'),  # Named entities (e.g., "Donald Trump")
-    re.compile(r'\b[A-Z]{2,6}\b'),  # Acronyms (e.g., "GDP", "FBI")
-    re.compile(r'\$[A-Z]{1,5}\b'),  # Tickers (e.g., "$BTC", "$AAPL")
+    re.compile(r'\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)+\b'),  # Multi-word: "Donald Trump", "Carolina Hurricanes"
+    re.compile(r'\b[A-Z][a-z]{5,}\b'),                  # Single-word ≥6 chars: "Hurricanes", "Avalanche", "Diamondbacks"
+    re.compile(r'\b[A-Z]{2,6}\b'),                       # Acronyms: "NHL", "GDP"
+    re.compile(r'\$[A-Z]{1,5}\b'),                       # Tickers: "$BTC"
 ]
 
 KEYWORD_SUPPLEMENTS = {
@@ -44,7 +45,16 @@ def extract_keywords(market_id: str, market_question: str, market_type: str) -> 
         matches = pattern.findall(market_question)
         for m in matches:
             cleaned = m.strip().strip("$")
-            if len(cleaned) > 1 and cleaned.upper() not in {"THE", "AND", "FOR", "BUT", "NOT", "YES", "WILL", "BE", "BY", "IN", "ON", "AT", "TO"}:
+            # Strip leading interrogative verbs caught by multi-word regex
+            for prefix in ("Will ", "Can ", "Should ", "Does ", "Has ", "Have ", "Did "):
+                if cleaned.startswith(prefix):
+                    cleaned = cleaned[len(prefix):]
+                    break
+            if len(cleaned) > 1 and cleaned.upper() not in {
+                "THE", "AND", "FOR", "BUT", "NOT", "YES", "WILL", "BE", "BY", "IN", "ON", "AT", "TO",
+                "FC", "BO1", "BO3", "BO5", "VS", "VS.", "OU", "OVER", "UNDER",
+                "SPREAD", "TOTAL", "MONEYLINE", "PARLAY", "TEASER",
+            }:
                 entities.add(cleaned)
 
     # Add market type supplements

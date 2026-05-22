@@ -29,6 +29,8 @@ class Settings(BaseSettings):
 
     # RSS Polling
     RSS_POLL_INTERVAL_SECONDS: int = 30
+    RSS_MAX_AGE_HOURS: float = 12.0       # Drop RSS items older than this (cutoff for both per-poll filter and cached signal prune)
+    RSS_ENTRIES_PER_FEED: int = 25        # Top N entries per feed per poll (was hardcoded 10)
 
     # Tier 1 Config
     TIER1_SCAN_INTERVAL_MINUTES: int = 15

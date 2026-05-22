@@ -183,15 +183,15 @@ class TestDeduplication:
 
 
 class TestOldHeadlineExclusion:
-    """Headlines older than 2 hours are excluded."""
+    """Headlines older than RSS_MAX_AGE_HOURS (default 12h) are excluded."""
 
     @pytest.mark.asyncio
-    async def test_headline_older_than_2h_excluded(self):
-        """A headline published 3 hours ago should be excluded."""
+    async def test_headline_older_than_max_age_excluded(self):
+        """A headline published 13 hours ago should be excluded (default cutoff=12h)."""
         pipeline = _build_pipeline()
-        three_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        thirteen_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
 
-        feed = _make_feed([_make_entry("Old headline", three_hours_ago)])
+        feed = _make_feed([_make_entry("Old headline", thirteen_hours_ago)])
 
         with patch("feedparser.parse", return_value=feed):
             with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
@@ -201,8 +201,8 @@ class TestOldHeadlineExclusion:
         assert "Old headline" not in contents
 
     @pytest.mark.asyncio
-    async def test_headline_within_2h_included(self):
-        """A headline published 1 hour ago should be included."""
+    async def test_headline_within_max_age_included(self):
+        """A headline published 1 hour ago should be included (well within 12h cutoff)."""
         pipeline = _build_pipeline()
         one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
@@ -378,11 +378,11 @@ class TestFeedParseFailure:
 
 
 class TestMaxEntriesPerFeed:
-    """Each feed only processes the first 10 entries."""
+    """Each feed only processes the first RSS_ENTRIES_PER_FEED entries (default 25)."""
 
     @pytest.mark.asyncio
-    async def test_max_10_entries_per_feed(self):
-        """A feed with 15 entries should only process the first 10."""
+    async def test_max_entries_per_feed_respects_settings(self):
+        """A feed with 30 entries should only process the first 25 (default RSS_ENTRIES_PER_FEED=25)."""
         feeds = {
             "big_feed": {
                 "url": "https://example.com/rss",
@@ -392,15 +392,15 @@ class TestMaxEntriesPerFeed:
         pipeline = _build_pipeline(feeds)
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        entries = [_make_entry(f"Headline {i}", now_iso) for i in range(15)]
+        entries = [_make_entry(f"Headline {i}", now_iso) for i in range(30)]
         feed = _make_feed(entries)
 
         with patch("feedparser.parse", return_value=feed):
             with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
                 signals = await pipeline.get_breaking_news()
 
-        # Only the first 10 entries should be processed
-        assert len(signals) <= 10
+        # Only the first 25 entries (default RSS_ENTRIES_PER_FEED) should be processed
+        assert len(signals) <= 25
 
     @pytest.mark.asyncio
     async def test_all_entries_processed_when_fewer_than_10(self):
@@ -652,8 +652,8 @@ class TestSignalAccumulator:
 
     @pytest.mark.asyncio
     async def test_prune_old_signals(self, rss_pipeline_clean):
-        """Signals older than 2 hours are pruned from cache."""
-        old_signal = _make_signal_simple("Old news", minutes_ago=130)
+        """Signals older than RSS_MAX_AGE_HOURS (default 12h) are pruned from cache."""
+        old_signal = _make_signal_simple("Old news", minutes_ago=780)  # 13 hours > 12h default cutoff
         fresh_signal = _make_signal_simple("Fresh news", minutes_ago=5)
         rss_pipeline_clean._cached_signals = [old_signal, fresh_signal]
         with patch.object(rss_pipeline_clean, "get_breaking_news", new_callable=AsyncMock, return_value=[]):
@@ -671,3 +671,30 @@ class TestSignalAccumulator:
         with patch.object(rss_pipeline_clean, "get_breaking_news", new_callable=AsyncMock, return_value=[s2]):
             await rss_pipeline_clean.poll_and_accumulate()
         assert len(rss_pipeline_clean._cached_signals) == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests: F5 configurable cutoff / entries (tests 6-7)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigurableSettings:
+    """RSSPipeline respects injected settings for RSS_MAX_AGE_HOURS and RSS_ENTRIES_PER_FEED."""
+
+    def test_rss_pipeline_uses_settings_cutoff(self):
+        """RSSPipeline stores injected settings with correct RSS_MAX_AGE_HOURS."""
+        s = MagicMock()
+        s.RSS_MAX_AGE_HOURS = 12.0
+        s.RSS_ENTRIES_PER_FEED = 25
+        with patch("src.pipelines.rss._load_feed_config", return_value={}):
+            pipeline = RSSPipeline(settings=s)
+        assert pipeline.settings.RSS_MAX_AGE_HOURS == 12.0
+        assert pipeline.settings.RSS_ENTRIES_PER_FEED == 25
+
+    def test_rss_pipeline_lazy_settings_fallback(self):
+        """Constructor without settings uses get_settings() which provides defaults."""
+        with patch("src.pipelines.rss._load_feed_config", return_value={}):
+            pipeline = RSSPipeline()
+        # Defaults from src/config.py Settings class
+        assert pipeline.settings.RSS_MAX_AGE_HOURS == 12.0
+        assert pipeline.settings.RSS_ENTRIES_PER_FEED == 25

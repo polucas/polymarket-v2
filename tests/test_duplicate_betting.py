@@ -344,16 +344,17 @@ class TestSimilarQuestionBlocked:
         # Both sides now use extract_keywords, so we need the candidate-side keywords and
         # the recent-side extract_keywords result to produce Jaccard >= 0.60.
         #
+        # F5 adds a single-word ≥6-char regex, so:
         # extract_keywords("market-prev", "Donald Trump wins 2028 presidential race", "political")
-        #   → named entity: "Donald Trump"; supplements (< 2 entities): ["election","vote","polls"]
-        #   → ["Donald Trump", "election", "vote", "polls"]
-        # candidate keywords: ["Donald Trump", "election", "vote", "polls"]
-        # intersection = all 4 → Jaccard = 1.0 >= 0.60 ✓
+        #   → "Donald Trump" (multi-word) + "Donald" (≥6 single-word) → 2 entities found, no supplements
+        #   → ["Donald", "Donald Trump"]
+        # candidate keywords: ["Donald", "Donald Trump"]
+        # intersection = both 2 → Jaccard = 2/2 = 1.0 >= 0.60 ✓
         market = _make_market(
             market_id="market-new",
             question="Will Donald Trump win the 2028 election?",
             market_type="political",
-            keywords=["Donald Trump", "election", "vote", "polls"],
+            keywords=["Donald", "Donald Trump"],
         )
         candidates = []
         all_skips = []

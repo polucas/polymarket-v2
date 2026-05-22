@@ -24,7 +24,7 @@ feeds:
     url: "https://cointelegraph.com/rss"
     domain: "cointelegraph.com"
   politico:
-    url: "https://www.politico.com/rss/politicopicks.xml"
+    url: "https://rss.politico.com/playbook.xml"
     domain: "politico.com"
   thehill:
     url: "https://thehill.com/rss/syndicator/19109"

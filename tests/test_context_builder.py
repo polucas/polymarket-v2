@@ -183,6 +183,46 @@ class TestExtractKeywords:
 
 
 # ---------------------------------------------------------------------------
+# extract_keywords — F5 additions (single-word entity, prefix stripping, stopwords)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractKeywordsF5:
+    def test_single_word_team_extracted(self):
+        """Single-word teams ≥6 chars (new regex) are extracted."""
+        kw = extract_keywords("m1", "Canadiens vs. Hurricanes: O/U 5.5", "sports")
+        assert "Hurricanes" in kw
+        assert "Canadiens" in kw
+
+    def test_will_prefix_stripped(self):
+        """Leading 'Will' is stripped from multi-word entities by the prefix filter."""
+        kw = extract_keywords("m2", "Will John Cornyn win the 2026 Texas Republican Primary?", "political")
+        assert "John Cornyn" in kw
+        assert "Will John Cornyn" not in kw
+
+    def test_fc_filtered_from_acronyms(self):
+        """'FC' is in the expanded stopword set and must not appear as a keyword."""
+        kw = extract_keywords("m3", "Will Caracas FC win on 2026-05-21?", "sports")
+        assert "FC" not in kw
+        assert "Caracas" in kw
+
+    def test_short_capitalized_word_not_overmatched(self):
+        """Words shorter than 6 chars (Will/May) must not be captured by the single-word regex."""
+        kw = extract_keywords("m4", "Will it rain in Madrid on May 25?", "weather")
+        # Madrid is 6 chars — allowed
+        assert "Madrid" in kw
+        # 'Will' (4 chars) and 'May' (3 chars) are not ≥6 chars for single-word regex,
+        # and 'Will' is stripped as a prefix from multi-word matches.
+        assert "Will" not in kw
+        assert "May" not in kw
+
+    def test_multi_word_still_captured(self):
+        """Regression: multi-word entities like 'Donald Trump' are still captured after F5 changes."""
+        kw = extract_keywords("m5", "Will Donald Trump announce military action?", "political")
+        assert "Donald Trump" in kw
+
+
+# ---------------------------------------------------------------------------
 # build_grok_context
 # ---------------------------------------------------------------------------
 
