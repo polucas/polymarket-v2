@@ -35,6 +35,20 @@ institutional_media:
     - "@CoinDesk"
     - "@TheBlock__"
     - "@guardian"
+    - "@politico"
+    - "@thehill"
+    - "@espn"
+    - "@TechCrunch"
+    - "@washingtonpost"
+    - "@axios"
+    - "@FT"
+    - "@business"
+    - "@TheEconomist"
+    - "@bbcsport"
+    - "@ESPNcricinfo"
+    - "@FoxNews"
+    - "@NBCNews"
+    - "@CBSNews"
   rss_domains:
     - "bbc.com"
     - "nytimes.com"
@@ -44,6 +58,22 @@ institutional_media:
     - "theblock.co"
     - "theguardian.com"
     - "cointelegraph.com"
+    # Added 2026-05-22: 4 feeds were defaulting to S6 (cred 0.30) because they
+    # were not classified — triggering weak_signals_0.30 gate. Bumped to S3 (0.80).
+    - "politico.com"
+    - "thehill.com"
+    - "espn.com"
+    - "techcrunch.com"
+    # Forward-add: outlets we may add feeds for later
+    - "washingtonpost.com"
+    - "bloomberg.com"
+    - "axios.com"
+    - "ft.com"
+    - "economist.com"
+    - "foxnews.com"
+    - "nbcnews.com"
+    - "cbsnews.com"
+    - "espncricinfo.com"
 
 expert_bio_keywords:
   - journalist
