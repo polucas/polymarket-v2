@@ -14,10 +14,11 @@ log = structlog.get_logger()
 _keyword_cache: Dict[str, List[str]] = {}
 
 ENTITY_PATTERNS = [
-    re.compile(r'\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)+\b'),  # Multi-word: "Donald Trump", "Carolina Hurricanes"
-    re.compile(r'\b[A-Z][a-z]{5,}\b'),                  # Single-word ≥6 chars: "Hurricanes", "Avalanche", "Diamondbacks"
-    re.compile(r'\b[A-Z]{2,6}\b'),                       # Acronyms: "NHL", "GDP"
-    re.compile(r'\$[A-Z]{1,5}\b'),                       # Tickers: "$BTC"
+    re.compile(r'\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)+\b'),   # Multi-word: "Donald Trump", "Carolina Hurricanes"
+    re.compile(r'\b[A-Z][a-z]+(?:-[A-Z][a-z]+)+\b'),    # Hyphenated: "Counter-Strike", "Real-Madrid"
+    re.compile(r'\b[A-Z][a-z]{5,}\b'),                   # Single-word ≥6 chars: "Hurricanes", "Avalanche", "Diamondbacks"
+    re.compile(r'\b[A-Z]{2,6}\b'),                        # Acronyms: "NHL", "GDP"
+    re.compile(r'\$[A-Z]{1,5}\b'),                        # Tickers: "$BTC"
 ]
 
 KEYWORD_SUPPLEMENTS = {
@@ -54,6 +55,13 @@ def extract_keywords(market_id: str, market_question: str, market_type: str) -> 
                 "THE", "AND", "FOR", "BUT", "NOT", "YES", "WILL", "BE", "BY", "IN", "ON", "AT", "TO",
                 "FC", "BO1", "BO3", "BO5", "VS", "VS.", "OU", "OVER", "UNDER",
                 "SPREAD", "TOTAL", "MONEYLINE", "PARLAY", "TEASER",
+                # Generic sports/esports words — too common in RSS headlines, cause false matches
+                "GAME", "WINNER", "MATCH", "SCORE", "PROMOTIONS", "HANDICAP", "GAMING",
+                "COUNTER", "STRIKE", "MAP", "ROUND", "PLAYOFFS", "CHAMPIONSHIP",
+                "QUARTERFINAL", "SEMIFINAL", "QUALIFIER", "QUALIFICATION",
+                "LEAGUE", "TOURNAMENT", "REGULAR", "SEASON", "SERIES",
+                # League acronyms — appear in every sports headline, useless for matching
+                "NHL", "NFL", "MLB", "NBA", "MLS", "UEFA", "ATP", "ITF", "WTA",
             }:
                 entities.add(cleaned)
 

@@ -96,6 +96,22 @@ class TestS3Classification:
         sig = {"source_type": "twitter", "account_handle": "@CNBC"}
         assert classify_source_tier(sig) == "S3"
 
+    def test_new_institutional_domains_classified_s3(self):
+        """F6 — 7 new domains added to known_sources.yaml institutional_media -> S3."""
+        new_domains = [
+            "bbc.co.uk",
+            "hltv.org",
+            "skysports.com",
+            "marketwatch.com",
+            "variety.com",
+            "deadline.com",
+            "engadget.com",
+        ]
+        for domain in new_domains:
+            sig = {"source_type": "rss", "domain": domain}
+            result = classify_source_tier(sig)
+            assert result == "S3", f"{domain} got {result!r}, expected 'S3'"
+
 
 # ---------------------------------------------------------------------------
 # S4 -- Verified domain experts

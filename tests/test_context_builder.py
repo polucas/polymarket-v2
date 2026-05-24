@@ -487,3 +487,56 @@ class TestBuildPrescreenContext:
         assert "do not anchor" in ctx.lower()
         # Prices still present (audit requirement)
         assert "0.7200" in ctx
+
+
+# ---------------------------------------------------------------------------
+# extract_keywords — F6 additions (hyphenated entities, sports stopwords,
+#                    league acronyms)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractKeywordsF6:
+    def test_hyphenated_entity_captured(self):
+        """Hyphenated proper names like 'Counter-Strike' are captured."""
+        kw = extract_keywords("m_hy1", "Counter-Strike: MIBR vs Legacy - Map 1 Winner", "esports")
+        assert "Counter-Strike" in kw
+        # Generic noise must be filtered by the expanded stopword set
+        assert "Winner" not in kw
+        assert "Map" not in kw
+
+    def test_generic_sports_stopwords_filtered(self):
+        """Generic esports words like 'Winner' and 'Game' are filtered out."""
+        kw = extract_keywords("m_sw1", "LoL: Karmine Corp vs G2 Esports - Game 4 Winner", "esports")
+        assert "Winner" not in kw
+        assert "Game" not in kw
+        # Real entity still captured
+        assert any("Karmine" in k for k in kw)
+
+    def test_league_acronyms_filtered(self):
+        """League acronyms like NHL are filtered; team names are kept."""
+        kw = extract_keywords("m_la1", "NHL Stanley Cup: Avalanche vs Hurricanes", "sports")
+        assert "NHL" not in kw
+        # Teams are ≥6-char single-word entities — must survive
+        assert "Avalanche" in kw
+        assert "Hurricanes" in kw
+
+    def test_promotions_filtered_standalone(self):
+        """Bare 'Promotions' token is filtered; real names in the question survive."""
+        kw = extract_keywords("m_pr1", "Brand Risk Promotions 14: Johnny Manziel vs. Bob Menery", "sports")
+        # Standalone "Promotions" must not appear as its own keyword
+        assert "Promotions" not in kw
+        # Real proper names must still come through
+        assert any("Manziel" in k for k in kw)
+
+    def test_regression_existing_extraction_preserved(self):
+        """F5 cases are not broken by F6 stopword additions."""
+        cases = [
+            ("Will Donald Trump announce military action?", "political", "Donald Trump"),
+            ("Knicks vs. Cavaliers: 1H O/U 109.5", "sports", "Knicks"),
+            ("Spread: Avalanche (-1.5)", "sports", "Avalanche"),
+            ("Will Carolina Hurricanes win on 2026-06-01?", "sports", "Hurricanes"),
+        ]
+        for q, mt, expected in cases:
+            _keyword_cache.clear()
+            kw = extract_keywords(f"m_reg_{expected}", q, mt)
+            assert any(expected in k for k in kw), f"{q} missing '{expected}', got {kw}"

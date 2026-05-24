@@ -74,6 +74,13 @@ institutional_media:
     - "nbcnews.com"
     - "cbsnews.com"
     - "espncricinfo.com"
+    - "bbc.co.uk"           # BBC sport sub-domain (bbc.com already present for world/business)
+    - "hltv.org"            # CS:GO esports
+    - "skysports.com"       # UK sports
+    - "marketwatch.com"     # Financial/economic
+    - "variety.com"         # Entertainment
+    - "deadline.com"        # Entertainment
+    - "engadget.com"        # Tech
 
 expert_bio_keywords:
   - journalist

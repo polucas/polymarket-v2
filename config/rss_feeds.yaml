@@ -35,3 +35,39 @@ feeds:
   techcrunch:
     url: "https://techcrunch.com/feed/"
     domain: "techcrunch.com"
+  bbcsport:
+    url: "https://feeds.bbci.co.uk/sport/rss.xml"
+    domain: "bbc.co.uk"
+  espn_nba:
+    url: "https://www.espn.com/espn/rss/nba/news"
+    domain: "espn.com"
+  espn_nfl:
+    url: "https://www.espn.com/espn/rss/nfl/news"
+    domain: "espn.com"
+  espn_mlb:
+    url: "https://www.espn.com/espn/rss/mlb/news"
+    domain: "espn.com"
+  espn_nhl:
+    url: "https://www.espn.com/espn/rss/nhl/news"
+    domain: "espn.com"
+  espn_soccer:
+    url: "https://www.espn.com/espn/rss/soccer/news"
+    domain: "espn.com"
+  hltv:
+    url: "https://www.hltv.org/rss/news"
+    domain: "hltv.org"
+  marketwatch:
+    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+    domain: "marketwatch.com"
+  variety:
+    url: "https://variety.com/feed/"
+    domain: "variety.com"
+  deadline:
+    url: "https://deadline.com/feed/"
+    domain: "deadline.com"
+  engadget:
+    url: "https://www.engadget.com/rss.xml"
+    domain: "engadget.com"
+  skysports:
+    url: "https://www.skysports.com/rss/12040"
+    domain: "skysports.com"
