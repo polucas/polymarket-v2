@@ -620,50 +620,67 @@ class TestWeakSignalGate:
 
 
 class TestFastExitCheck:
-    """_fast_exit_check dispatches to check_early_exits only when WS is disconnected."""
+    """_fast_exit_check (Bug 9): polls check_early_exits whenever positions are
+    tracked, regardless of ws_exit_mgr._connected (which can lie on silent stall).
+    No-ops when ws_exit_mgr is None or _active_positions is empty."""
 
     @pytest.mark.asyncio
-    async def test_noop_when_ws_connected(self):
-        """When ws_exit_mgr._connected=True, check_early_exits must NOT be called."""
+    async def test_noop_when_no_positions(self):
+        """Skip when no positions tracked, regardless of _connected state."""
         scheduler = _build_scheduler()
-        scheduler.ws_exit_mgr = MagicMock()
-        scheduler.ws_exit_mgr._connected = True
+        scheduler.ws_exit_mgr = MagicMock(_active_positions={}, _connected=False)
 
-        # _fast_exit_check uses a local import, so patch at the module level
         with patch(
             "src.engine.resolution.check_early_exits", new_callable=AsyncMock
-        ) as mock_check:
+        ) as cee:
             await scheduler._fast_exit_check()
 
-        mock_check.assert_not_called()
+        cee.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_fires_when_ws_disconnected(self):
-        """When ws_exit_mgr._connected=False, check_early_exits must be called once."""
+    async def test_fires_when_positions_tracked(self):
+        """Polls Gamma whenever positions exist — even if _connected=True (Bug 9 safety)."""
         scheduler = _build_scheduler()
-        scheduler.ws_exit_mgr = MagicMock()
-        scheduler.ws_exit_mgr._connected = False
+        scheduler.ws_exit_mgr = MagicMock(
+            _active_positions={"tok-1": MagicMock()},
+            _connected=True,  # Bug 9: flag can lie; fast_exit_check must still run
+        )
 
-        # _fast_exit_check uses: from src.engine.resolution import check_early_exits
         with patch(
             "src.engine.resolution.check_early_exits", new_callable=AsyncMock
-        ) as mock_check:
+        ) as cee:
             await scheduler._fast_exit_check()
 
-        mock_check.assert_awaited_once()
+        cee.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_fires_when_positions_tracked_and_disconnected(self):
+        """Also fires when _connected=False (original Bug 6a behavior preserved)."""
+        scheduler = _build_scheduler()
+        scheduler.ws_exit_mgr = MagicMock(
+            _active_positions={"tok-1": MagicMock()},
+            _connected=False,
+        )
+
+        with patch(
+            "src.engine.resolution.check_early_exits", new_callable=AsyncMock
+        ) as cee:
+            await scheduler._fast_exit_check()
+
+        cee.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_noop_when_ws_exit_mgr_none(self):
-        """When ws_exit_mgr is None, check_early_exits must NOT be called."""
+        """Still skip when ws_exit_mgr is None."""
         scheduler = _build_scheduler()
         scheduler.ws_exit_mgr = None
 
         with patch(
             "src.engine.resolution.check_early_exits", new_callable=AsyncMock
-        ) as mock_check:
+        ) as cee:
             await scheduler._fast_exit_check()
 
-        mock_check.assert_not_called()
+        cee.assert_not_called()
 
 
 class TestMarketTypeDisabledEnv:

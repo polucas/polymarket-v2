@@ -168,8 +168,13 @@ class Scheduler:
             await send_alert(format_error_alert(f"Auto-resolve failed: {e}"), self._settings)
 
     async def _fast_exit_check(self) -> None:
-        """Fallback poll when WS is disconnected. No-op when WS healthy."""
-        if self.ws_exit_mgr is None or self.ws_exit_mgr._connected:
+        """Belt-and-suspenders poll. Runs whenever positions are tracked, regardless
+        of ws_exit_mgr._connected — which can lie (Bug 9: silent stall keeps flag
+        True while no events arrive). Safe to call alongside WS — check_early_exits
+        is idempotent on already-exited trades."""
+        if self.ws_exit_mgr is None:
+            return
+        if not self.ws_exit_mgr._active_positions:
             return
         try:
             from src.engine.resolution import check_early_exits

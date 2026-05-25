@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     FAST_EXIT_POLL_INTERVAL_SECONDS: int = 60
     WS_HEARTBEAT_SECONDS: int = 10
     MIN_BID_LIQUIDITY_USD: float = 5.0  # Skip WS exit if best-bid liquidity below this (Bug 7b — flash empty-book guard)
+    WS_SILENT_TIMEOUT_SECONDS: int = 60  # Force WS reconnect if no message received in this window while positions monitored (Bug 9 — silent stall detection)
 
     # Monk Mode
     DAILY_LOSS_LIMIT_PCT: float = 0.05

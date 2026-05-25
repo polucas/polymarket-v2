@@ -51,6 +51,7 @@ class RealTimeExitManager:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._connected = False
+        self._last_message_at: float = 0.0  # monotonic time of last received WS message (any type)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -135,10 +136,13 @@ class RealTimeExitManager:
                         log.info("ws_exit_connected", positions=len(token_ids))
 
                         last_refresh = time.monotonic()
+                        self._last_message_at = time.monotonic()  # baseline for stall detection
 
                         async for msg in ws:
                             if not self._running:
                                 break
+
+                            self._last_message_at = time.monotonic()  # any message proves connection alive
 
                             if msg.type == aiohttp.WSMsgType.TEXT:
                                 try:
@@ -165,6 +169,17 @@ class RealTimeExitManager:
                                     await self._subscribe(ws, token_ids)
                                     log.info("ws_exit_resubscribed", positions=len(token_ids))
                                 last_refresh = time.monotonic()
+
+                                # Bug 9: detect silent stall — WS open but server stopped pushing
+                                silence = time.monotonic() - self._last_message_at
+                                if token_ids and silence > self.settings.WS_SILENT_TIMEOUT_SECONDS:
+                                    log.warning(
+                                        "ws_silent_stall_detected",
+                                        silence_seconds=int(silence),
+                                        positions=len(token_ids),
+                                    )
+                                    self._connected = False  # signal downstream that connection is bad
+                                    break  # exit inner loop → outer loop reconnects
 
             except asyncio.CancelledError:
                 break

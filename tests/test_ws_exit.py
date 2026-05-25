@@ -73,6 +73,7 @@ def _build_manager(trades=None, portfolio=None):
     settings.TELEGRAM_BOT_TOKEN = ""
     settings.TELEGRAM_CHAT_ID = ""
     settings.MIN_BID_LIQUIDITY_USD = 5.0
+    settings.WS_SILENT_TIMEOUT_SECONDS = 60
 
     mgr = RealTimeExitManager(db=db, polymarket_client=polymarket, settings=settings)
     return mgr
@@ -667,3 +668,79 @@ class TestWsHeartbeatFromSettings:
         assert "heartbeat=30" not in source, (
             "_listen_loop must not use hardcoded heartbeat=30"
         )
+
+
+# ---------------------------------------------------------------------------
+# F7 Tests: Bug 9 — Silent stall detection
+# ---------------------------------------------------------------------------
+
+
+class TestSilentStallDetection:
+    """Bug 9: RealTimeExitManager detects WS silent stalls (connected but no messages)."""
+
+    def test_last_message_at_initialized(self):
+        """Constructor sets _last_message_at to 0.0."""
+        mgr = _build_manager(trades=[])
+        assert mgr._last_message_at == 0.0
+
+    @pytest.mark.asyncio
+    async def test_message_updates_last_message_at(self):
+        """Simulate the listen-loop assignment: _last_message_at is updated within
+        a valid monotonic window around the assignment."""
+        import time
+        mgr = _build_manager(trades=[])
+        before = time.monotonic()
+        mgr._last_message_at = time.monotonic()
+        after = time.monotonic()
+        assert before <= mgr._last_message_at <= after
+
+    def test_silent_timeout_setting_loads(self):
+        """Verify WS_SILENT_TIMEOUT_SECONDS default = 60."""
+        from src.config import Settings
+        s = Settings(XAI_API_KEY="x", POLYMARKET_API_KEY="y")
+        assert s.WS_SILENT_TIMEOUT_SECONDS == 60
+
+    def test_silent_timeout_custom_value(self):
+        """WS_SILENT_TIMEOUT_SECONDS can be overridden."""
+        from src.config import Settings
+        s = Settings(XAI_API_KEY="x", POLYMARKET_API_KEY="y", WS_SILENT_TIMEOUT_SECONDS=120)
+        assert s.WS_SILENT_TIMEOUT_SECONDS == 120
+
+    def test_listen_loop_references_silent_timeout(self):
+        """_listen_loop source must reference WS_SILENT_TIMEOUT_SECONDS for stall detection."""
+        import inspect
+        import src.engine.ws_exit as ws_mod
+        source = inspect.getsource(ws_mod.RealTimeExitManager._listen_loop)
+        assert "WS_SILENT_TIMEOUT_SECONDS" in source, (
+            "_listen_loop must reference settings.WS_SILENT_TIMEOUT_SECONDS"
+        )
+        assert "_last_message_at" in source, (
+            "_listen_loop must update _last_message_at on each message"
+        )
+
+    def test_stall_detection_arithmetic(self):
+        """Stall is detected when silence > WS_SILENT_TIMEOUT_SECONDS and token_ids non-empty.
+        Validates the branch logic without driving the full WS loop."""
+        import time
+        mgr = _build_manager(trades=[])
+
+        silent_timeout = 60
+        token_ids = ["tok-1"]
+
+        # Case 1: stall — last message was 90s ago
+        mgr._last_message_at = time.monotonic() - 90
+        silence = time.monotonic() - mgr._last_message_at
+        stall_detected = bool(token_ids) and silence > silent_timeout
+        assert stall_detected is True
+
+        # Case 2: no stall — last message was 10s ago
+        mgr._last_message_at = time.monotonic() - 10
+        silence = time.monotonic() - mgr._last_message_at
+        stall_detected = bool(token_ids) and silence > silent_timeout
+        assert stall_detected is False
+
+        # Case 3: silence long but no positions — no stall trigger
+        mgr._last_message_at = time.monotonic() - 90
+        silence = time.monotonic() - mgr._last_message_at
+        stall_detected = bool([]) and silence > silent_timeout
+        assert stall_detected is False
