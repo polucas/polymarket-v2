@@ -221,7 +221,7 @@ async def check_early_exits(
             exit_type = None
             if roi >= settings.TAKE_PROFIT_ROI:
                 exit_type = "take_profit"
-            elif roi <= settings.STOP_LOSS_ROI:
+            elif settings.STOP_LOSS_ENABLED and roi <= settings.STOP_LOSS_ROI:
                 exit_type = "stop_loss"
 
             if exit_type is None:
@@ -290,6 +290,12 @@ async def update_unrealized_adverse_moves(db: Database, polymarket_client) -> No
 
             current_price = market.yes_price
             entry_price = trade.market_price_at_decision
+
+            roi = calculate_unrealized_roi(trade, current_price)
+            try:
+                await db.record_price_snapshot(trade.record_id, current_price, roi, source="poll")
+            except Exception as e:
+                log.warning("snapshot_write_failed", market_id=trade.market_id, error=str(e))
 
             if trade.action == "BUY_YES":
                 adverse_move = max(0, entry_price - current_price)

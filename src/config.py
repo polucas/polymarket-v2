@@ -52,7 +52,9 @@ class Settings(BaseSettings):
     # Early Exit
     TAKE_PROFIT_ROI: float = 0.20
     STOP_LOSS_ROI: float = -0.15
+    STOP_LOSS_ENABLED: bool = True   # Set False to disable SL execution while keeping TP (research/A-B)
     EARLY_EXIT_ENABLED: bool = True
+    TRADE_SNAPSHOT_INTERVAL_SECONDS: int = 30  # Min seconds between price snapshots per trade
     FAST_EXIT_POLL_INTERVAL_SECONDS: int = 60
     WS_HEARTBEAT_SECONDS: int = 10
     MIN_BID_LIQUIDITY_USD: float = 5.0  # Skip WS exit if best-bid liquidity below this (Bug 7b — flash empty-book guard)

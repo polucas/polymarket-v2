@@ -3,7 +3,11 @@
   "databases": {
     "predictor": {
       "tables": {
-        "trade_records": { "sort_desc": "timestamp" }
+        "trade_records": { "sort_desc": "timestamp" },
+        "trade_price_snapshots": {
+          "sort_desc": "timestamp",
+          "description": "Per-trade price/ROI evolution snapshots. Source: 'ws' (real-time WebSocket) or 'poll' (10-min adverse-move checker). Used for retrospective SL threshold analysis via scripts/sl_analysis.py."
+        }
       },
       "queries": {
         "performance_summary": {

@@ -913,3 +913,74 @@ class TestAutoResolveUpdatesPortfolioForUnexited:
         # cash_balance should increase
         saved_portfolio = mock_db.save_portfolio.call_args[0][0]
         assert saved_portfolio.cash_balance > initial_cash
+
+
+# ---------------------------------------------------------------------------
+# F8 Tests: STOP_LOSS_ENABLED flag in check_early_exits
+# ---------------------------------------------------------------------------
+
+
+class TestCheckEarlyExitsStopLossEnabled:
+    @pytest.mark.asyncio
+    async def test_check_early_exits_skips_sl_when_disabled(self):
+        """STOP_LOSS_ENABLED=False → SL not triggered even when ROI is deeply negative."""
+        trade = _make_record(
+            action="BUY_YES",
+            market_price_at_decision=0.50,
+            position_size_usd=100.0,
+            actual_outcome=None,
+            pnl=None,
+        )
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+        mock_db.load_portfolio.return_value = Portfolio(
+            cash_balance=9900.0, total_equity=10000.0, peak_equity=10000.0
+        )
+
+        # current price 0.25 → ROI = -50%, well below SL of -15%
+        mock_market = SimpleNamespace(resolved=False, resolution=None, yes_price=0.25)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        settings = _make_settings_mock()
+        settings.STOP_LOSS_ENABLED = False
+
+        await check_early_exits(mock_db, mock_client, settings)
+
+        # No exit should be triggered
+        mock_db.update_trade.assert_not_awaited()
+        assert trade.exit_type is None
+
+
+# ---------------------------------------------------------------------------
+# F8 Tests: update_unrealized_adverse_moves records price snapshot
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateUnrealizedAdverseMovesSnapshot:
+    @pytest.mark.asyncio
+    async def test_update_unrealized_adverse_records_snapshot(self):
+        """update_unrealized_adverse_moves calls record_price_snapshot for each open trade."""
+        trade = _make_record(
+            action="BUY_YES",
+            market_price_at_decision=0.60,
+            actual_outcome=None,
+        )
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades.return_value = [trade]
+
+        mock_market = SimpleNamespace(yes_price=0.55)
+        mock_client = AsyncMock()
+        mock_client.get_market.return_value = mock_market
+
+        await update_unrealized_adverse_moves(mock_db, mock_client)
+
+        mock_db.record_price_snapshot.assert_awaited_once()
+        call_args = mock_db.record_price_snapshot.call_args
+        # Positional args: trade_record_id, current_price, roi
+        assert call_args[0][0] == trade.record_id       # trade_record_id
+        assert call_args[0][1] == pytest.approx(0.55)   # current_price (best_bid)
+        # source is passed as keyword argument
+        assert call_args[1].get("source") == "poll"

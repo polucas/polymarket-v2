@@ -515,6 +515,14 @@ class Database:
         )
         await self._conn.commit()
 
+    async def record_price_snapshot(self, trade_record_id: str, best_bid: float, roi: float, source: str) -> None:
+        """Insert a price snapshot for the given trade. Used for retrospective SL analysis."""
+        await self._conn.execute(
+            "INSERT INTO trade_price_snapshots (trade_record_id, best_bid, roi, source) VALUES (?, ?, ?, ?)",
+            (trade_record_id, best_bid, roi, source),
+        )
+        await self._conn.commit()
+
     # ------------------------------------------------------------------
     # Model Swaps
     # ------------------------------------------------------------------

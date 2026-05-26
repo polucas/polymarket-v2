@@ -52,6 +52,7 @@ class RealTimeExitManager:
         self._task: Optional[asyncio.Task] = None
         self._connected = False
         self._last_message_at: float = 0.0  # monotonic time of last received WS message (any type)
+        self._last_snapshot_at: Dict[str, float] = {}  # token_id -> monotonic time of last snapshot
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -111,6 +112,21 @@ class RealTimeExitManager:
             market_id=trade.market_id,
             token_id=trade.clob_token_id_yes,
         )
+
+    async def _maybe_record_snapshot(self, trade, best_bid: float, roi: float, source: str = "ws") -> None:
+        """Record price snapshot for active trade, throttled to TRADE_SNAPSHOT_INTERVAL_SECONDS per trade."""
+        if not trade or not trade.clob_token_id_yes:
+            return
+        token_id = trade.clob_token_id_yes
+        now = time.monotonic()
+        last = self._last_snapshot_at.get(token_id, 0.0)
+        if now - last < self.settings.TRADE_SNAPSHOT_INTERVAL_SECONDS:
+            return
+        self._last_snapshot_at[token_id] = now
+        try:
+            await self.db.record_price_snapshot(trade.record_id, best_bid, roi, source)
+        except Exception as e:
+            log.warning("snapshot_write_failed", market_id=trade.market_id, error=str(e))
 
     # ------------------------------------------------------------------
     # Main loop
@@ -260,9 +276,12 @@ class RealTimeExitManager:
             # Use best_bid as current YES price for ROI calculation
             roi = calculate_unrealized_roi(trade, best_bid)
 
+            # Record price snapshot for retrospective SL analysis
+            await self._maybe_record_snapshot(trade, best_bid, roi, source="ws")
+
             if roi >= self.settings.TAKE_PROFIT_ROI:
                 await self._trigger_exit(trade, best_bid, "take_profit")
-            elif roi <= self.settings.STOP_LOSS_ROI:
+            elif self.settings.STOP_LOSS_ENABLED and roi <= self.settings.STOP_LOSS_ROI:
                 await self._trigger_exit(trade, best_bid, "stop_loss")
 
     # ------------------------------------------------------------------

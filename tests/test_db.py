@@ -33,6 +33,7 @@ class TestSchema:
             "schema_version", "experiment_runs", "model_swaps", "trade_records",
             "calibration_state", "market_type_performance", "signal_trackers",
             "portfolio", "api_costs", "parse_failures",
+            "trade_price_snapshots",
         }
         assert expected.issubset(tables)
 
@@ -343,3 +344,44 @@ class TestDualLabelDB:
         assert loaded.avg_pnl_brier_raw == pytest.approx(0.09)
         assert loaded.avg_pnl_brier_adjusted == pytest.approx(0.08)
         assert loaded.pnl_resolved_count == 7
+
+
+# ---------------------------------------------------------------------------
+# F8: record_price_snapshot
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestRecordPriceSnapshot:
+    async def test_record_price_snapshot_inserts_row(self, db, sample_trade_record):
+        """Insert a snapshot row and verify all columns are correctly stored."""
+        trade = sample_trade_record(action="BUY_YES")
+        await db.save_trade(trade)
+
+        await db.record_price_snapshot(trade.record_id, 0.45, -0.10, "ws")
+
+        cursor = await db._conn.execute(
+            "SELECT trade_record_id, best_bid, roi, source FROM trade_price_snapshots"
+        )
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == trade.record_id
+        assert abs(row[1] - 0.45) < 1e-9
+        assert abs(row[2] - (-0.10)) < 1e-9
+        assert row[3] == "ws"
+
+    async def test_record_price_snapshot_multiple_rows(self, db, sample_trade_record):
+        """Multiple snapshots for the same trade are all stored."""
+        trade = sample_trade_record(action="BUY_YES")
+        await db.save_trade(trade)
+
+        await db.record_price_snapshot(trade.record_id, 0.55, 0.10, "ws")
+        await db.record_price_snapshot(trade.record_id, 0.50, 0.00, "poll")
+        await db.record_price_snapshot(trade.record_id, 0.42, -0.16, "ws")
+
+        cursor = await db._conn.execute(
+            "SELECT COUNT(*) FROM trade_price_snapshots WHERE trade_record_id = ?",
+            (trade.record_id,),
+        )
+        row = await cursor.fetchone()
+        assert row[0] == 3

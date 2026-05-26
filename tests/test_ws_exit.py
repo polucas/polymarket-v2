@@ -69,6 +69,8 @@ def _build_manager(trades=None, portfolio=None):
     settings.EARLY_EXIT_ENABLED = True
     settings.TAKE_PROFIT_ROI = 0.20
     settings.STOP_LOSS_ROI = -0.15
+    settings.STOP_LOSS_ENABLED = True
+    settings.TRADE_SNAPSHOT_INTERVAL_SECONDS = 30
     settings.ENVIRONMENT = "paper"
     settings.TELEGRAM_BOT_TOKEN = ""
     settings.TELEGRAM_CHAT_ID = ""
@@ -744,3 +746,111 @@ class TestSilentStallDetection:
         silence = time.monotonic() - mgr._last_message_at
         stall_detected = bool([]) and silence > silent_timeout
         assert stall_detected is False
+
+
+# ---------------------------------------------------------------------------
+# F8 Tests: STOP_LOSS_ENABLED flag
+# ---------------------------------------------------------------------------
+
+
+class TestStopLossEnabled:
+    @pytest.mark.asyncio
+    async def test_sl_disabled_skips_sl_fire(self):
+        """STOP_LOSS_ENABLED=False → SL trigger condition NOT met, even at deep ROI."""
+        trade = _make_trade(entry_price=0.50)
+        mgr = _build_manager(trades=[trade])
+        mgr.settings.STOP_LOSS_ENABLED = False
+        mgr._active_positions = {trade.clob_token_id_yes: trade}
+
+        ws_message = [{
+            "event_type": "book",
+            "asset_id": trade.clob_token_id_yes,
+            "bids": [{"price": "0.30", "size": "100"}],  # ROI ~-40%, normally fires SL
+            "asks": [],
+        }]
+        await mgr._handle_message(ws_message)
+        mgr.db.update_trade.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sl_enabled_still_fires_default(self):
+        """Default STOP_LOSS_ENABLED=True: SL still fires when ROI breaches threshold."""
+        trade = _make_trade(entry_price=0.50)
+        mgr = _build_manager(trades=[trade], portfolio=_make_portfolio())
+        # settings.STOP_LOSS_ENABLED is True via _build_manager defaults
+        mgr._active_positions = {trade.clob_token_id_yes: trade}
+
+        ws_message = [{
+            "event_type": "book",
+            "asset_id": trade.clob_token_id_yes,
+            "bids": [{"price": "0.40", "size": "100"}],  # ROI -20%, above SL threshold of -15%
+            "asks": [],
+        }]
+        with patch("src.engine.ws_exit.send_alert", new_callable=AsyncMock):
+            await mgr._handle_message(ws_message)
+
+        mgr.db.update_trade.assert_called_once()
+        updated = mgr.db.update_trade.call_args[0][0]
+        assert updated.exit_type == "stop_loss"
+
+
+# ---------------------------------------------------------------------------
+# F8 Tests: Snapshot recording
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotRecording:
+    @pytest.mark.asyncio
+    async def test_first_message_records_snapshot(self):
+        """First WS book message for a trade triggers a price snapshot."""
+        trade = _make_trade(entry_price=0.50)
+        mgr = _build_manager(trades=[trade])
+        mgr._active_positions = {trade.clob_token_id_yes: trade}
+
+        ws_message = [{
+            "event_type": "book",
+            "asset_id": trade.clob_token_id_yes,
+            "bids": [{"price": "0.52", "size": "100"}],  # ROI ~4%, no TP/SL
+            "asks": [],
+        }]
+        await mgr._handle_message(ws_message)
+        mgr.db.record_price_snapshot.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_throttled(self):
+        """Second snapshot within TRADE_SNAPSHOT_INTERVAL_SECONDS should be skipped."""
+        trade = _make_trade(entry_price=0.50)
+        mgr = _build_manager(trades=[trade])
+        mgr.settings.TRADE_SNAPSHOT_INTERVAL_SECONDS = 30
+        mgr._active_positions = {trade.clob_token_id_yes: trade}
+
+        msg = [{
+            "event_type": "book",
+            "asset_id": trade.clob_token_id_yes,
+            "bids": [{"price": "0.52", "size": "100"}],
+            "asks": [],
+        }]
+        await mgr._handle_message(msg)
+        await mgr._handle_message(msg)
+        # First call recorded, second throttled within 30s window
+        assert mgr.db.record_price_snapshot.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_snapshot_records_after_throttle_passes(self):
+        """After throttle interval elapses, snapshot fires again."""
+        import time
+        trade = _make_trade(entry_price=0.50)
+        mgr = _build_manager(trades=[trade])
+        mgr.settings.TRADE_SNAPSHOT_INTERVAL_SECONDS = 30
+        mgr._active_positions = {trade.clob_token_id_yes: trade}
+
+        msg = [{
+            "event_type": "book",
+            "asset_id": trade.clob_token_id_yes,
+            "bids": [{"price": "0.52", "size": "100"}],
+            "asks": [],
+        }]
+        await mgr._handle_message(msg)
+        # Backdate last_snapshot_at to simulate 31s having passed
+        mgr._last_snapshot_at[trade.clob_token_id_yes] = time.monotonic() - 31
+        await mgr._handle_message(msg)
+        assert mgr.db.record_price_snapshot.call_count == 2

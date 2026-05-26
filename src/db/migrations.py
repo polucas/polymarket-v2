@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import aiosqlite
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 MIGRATIONS: dict[int, list[str]] = {
     1: [
@@ -209,6 +209,18 @@ MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE daily_reviews ADD COLUMN avg_pnl_brier_raw REAL DEFAULT NULL",
         "ALTER TABLE daily_reviews ADD COLUMN avg_pnl_brier_adjusted REAL DEFAULT NULL",
         "ALTER TABLE daily_reviews ADD COLUMN pnl_resolved_count INTEGER DEFAULT 0",
+    ],
+    8: [
+        """CREATE TABLE IF NOT EXISTS trade_price_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_record_id TEXT NOT NULL REFERENCES trade_records(record_id),
+            timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+            best_bid REAL NOT NULL,
+            roi REAL NOT NULL,
+            source TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_snapshots_trade ON trade_price_snapshots(trade_record_id)",
+        "CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON trade_price_snapshots(timestamp)",
     ],
 }
 

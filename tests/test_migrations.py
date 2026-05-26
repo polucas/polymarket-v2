@@ -36,9 +36,9 @@ async def _apply_migrations_up_to(conn: aiosqlite.Connection, max_version: int) 
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_7():
-    """SCHEMA_VERSION must be 7 after Phase 1 dual-label migration."""
-    assert SCHEMA_VERSION == 7
+def test_schema_version_is_8():
+    """SCHEMA_VERSION must be 8 after F8 price snapshot migration."""
+    assert SCHEMA_VERSION == 8
 
 
 # ---------------------------------------------------------------------------
@@ -185,3 +185,36 @@ async def test_full_migration_is_idempotent():
         await run_migrations(db)  # second run should be a no-op
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_migration_v8_creates_snapshot_table():
+    """Migration 8 creates trade_price_snapshots table with required columns and indexes."""
+    async with aiosqlite.connect(":memory:") as conn:
+        # Apply all migrations up to v8
+        await _apply_migrations_up_to(conn, 8)
+
+        # Check table exists
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='trade_price_snapshots'"
+        )
+        row = await cursor.fetchone()
+        assert row is not None, "trade_price_snapshots table should exist after v8 migration"
+
+        # Check required columns via PRAGMA
+        cursor = await conn.execute("PRAGMA table_info(trade_price_snapshots)")
+        col_rows = await cursor.fetchall()
+        col_names = {r[1] for r in col_rows}
+        required_cols = {"id", "trade_record_id", "timestamp", "best_bid", "roi", "source"}
+        assert required_cols.issubset(col_names), (
+            f"Missing columns: {required_cols - col_names}"
+        )
+
+        # Check indexes exist
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='trade_price_snapshots'"
+        )
+        idx_rows = await cursor.fetchall()
+        idx_names = {r[0] for r in idx_rows}
+        assert "idx_snapshots_trade" in idx_names
+        assert "idx_snapshots_timestamp" in idx_names

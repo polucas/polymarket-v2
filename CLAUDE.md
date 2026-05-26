@@ -132,6 +132,8 @@ docs/
 - **RSS polling:** 30s independent cycle (`RSS_POLL_INTERVAL_SECONDS=30`)
 - **Execution:** Both tiers use maker orders (`TIER1_EXECUTION_TYPE=maker`, `TIER2_EXECUTION_TYPE=maker`)
 - **Early exit:** Take-profit at +20% ROI, stop-loss at -15% ROI (`EARLY_EXIT_ENABLED=true`)
+- **SL disable flag:** `STOP_LOSS_ENABLED` (default `True`). Set `False` to keep TP firing but never exit on SL — used for A/B research on whether SL is net-positive. Combined with the `trade_price_snapshots` table, lets us simulate any SL threshold retrospectively via `scripts/sl_analysis.py`.
+- **`trade_price_snapshots` table** — per-trade price/ROI evolution. Recorded every `TRADE_SNAPSHOT_INTERVAL_SECONDS` (30s default) by ws_exit + every 10min by `update_unrealized_adverse_moves`. Source field distinguishes "ws" vs "poll". Enables retrospective SL threshold analysis.
 - **Dashboard:** `/health` (status), `/reviews` and `/reviews/{date}` (daily self-check reports)
 
 ## Conventions
