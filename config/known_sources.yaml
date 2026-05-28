@@ -12,6 +12,9 @@ official_sources:
     - "whitehouse.gov"
     - "supremecourt.gov"
     - "treasury.gov"
+    # Added 2026-05-28: Phase A RSS research — official gov/inter-gov sources
+    - "noaa.gov"              # NOAA/NHC/SPC (weather, hurricanes, tornadoes)
+    - "europa.eu"             # European Parliament, European Council (EU policy/foreign affairs)
 
 wire_services:
   twitter:
@@ -86,6 +89,22 @@ institutional_media:
     - "football-italia.net" # Italian Serie A football
     - "marca.com"           # Spanish football (English edition)
     - "skynews.com"         # UK general news
+    # Added 2026-05-28: Phase A RSS research — fill gap categories
+    # Esports (was 1 CS-only feed)
+    - "dotesports.com"        # Multi-game esports (LoL/Dota/Valorant/Apex)
+    - "dexerto.com"           # Multi-game esports + gaming
+    # Political (intl — was US-only)
+    - "politico.eu"           # EU politics (Politico Europe)
+    - "euractiv.com"          # EU policy/regulation
+    # Geopolitical
+    - "euronews.com"          # European geopolitics
+    - "foreignpolicy.com"     # Geopolitics + diplomacy analysis
+    # Regulatory (was generic only)
+    - "scotusblog.com"        # SCOTUS rulings + cert grants
+    # Cultural
+    - "billboard.com"         # Music charts + industry
+    - "hollywoodreporter.com" # Film/TV industry business
+    - "polygon.com"           # Gaming industry (not esports)
 
 expert_bio_keywords:
   - journalist

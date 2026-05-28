@@ -86,3 +86,55 @@ feeds:
   skynews:
     url: "https://feeds.skynews.com/feeds/rss/home.xml"
     domain: "skynews.com"
+  # Added 2026-05-28: Phase A gap-fill (weather/esports/political/geopolitical/regulatory/cultural)
+  # Weather — fills 0-feed critical gap (NOAA → S1)
+  nhc_atlantic:
+    url: "https://www.nhc.noaa.gov/index-at.xml"
+    domain: "nhc.noaa.gov"
+  nhc_outlook:
+    url: "https://www.nhc.noaa.gov/gtwo.xml"
+    domain: "nhc.noaa.gov"
+  spc_severe:
+    url: "http://www.spc.noaa.gov/products/spcrss.xml"
+    domain: "spc.noaa.gov"
+  # Esports — fills LoL/Dota/Valorant gap (was CS-only)
+  dotesports:
+    url: "https://dotesports.com/feed"
+    domain: "dotesports.com"
+  dexerto:
+    url: "https://www.dexerto.com/feed/"
+    domain: "dexerto.com"
+  # Political intl — fills EU/UK gap
+  politico_eu:
+    url: "https://www.politico.eu/feed"
+    domain: "politico.eu"
+  euractiv:
+    url: "https://www.euractiv.com/feed"
+    domain: "euractiv.com"
+  europarl:
+    url: "https://www.europarl.europa.eu/rss/en/pressroom.rss"
+    domain: "europarl.europa.eu"
+  # Geopolitical — fills wire/analysis gap
+  euronews:
+    url: "https://www.euronews.com/rss"
+    domain: "euronews.com"
+  foreignpolicy:
+    url: "https://foreignpolicy.com/feed/"
+    domain: "foreignpolicy.com"
+  # Regulatory — dedicated SEC + SCOTUS feeds (was generic)
+  sec_press:
+    url: "https://www.sec.gov/rss/news/pressreleases.rss"
+    domain: "sec.gov"
+  scotusblog:
+    url: "https://www.scotusblog.com/feed/"
+    domain: "scotusblog.com"
+  # Cultural — music + film industry + gaming industry
+  billboard:
+    url: "https://www.billboard.com/feed/"
+    domain: "billboard.com"
+  hollywoodreporter:
+    url: "https://www.hollywoodreporter.com/feed/"
+    domain: "hollywoodreporter.com"
+  polygon:
+    url: "https://www.polygon.com/rss/index.xml"
+    domain: "polygon.com"

@@ -709,9 +709,9 @@ class TestYamlFeedCount:
     """Tracks rss_feeds.yaml expansions. Update count when adding new feeds."""
 
     def test_yaml_loads_expected_feed_count(self):
-        """29 feeds total after F6 (12 → 24) + niche-coverage round (24 → 29)."""
+        """44 feeds after Phase A gap-fill (29 → 44: weather/esports/intl-politics/geopolitics/regulatory/cultural)."""
         feeds = _load_feed_config()
-        assert len(feeds) == 29, f"Expected 29 feeds, got {len(feeds)}: {list(feeds.keys())}"
+        assert len(feeds) == 44, f"Expected 44 feeds, got {len(feeds)}: {list(feeds.keys())}"
         # Spot-check every F6 entry is present
         expected_f6 = [
             "bbcsport", "espn_nba", "espn_nfl", "espn_mlb", "espn_nhl", "espn_soccer",
@@ -722,4 +722,15 @@ class TestYamlFeedCount:
         # Spot-check niche-coverage round
         expected_niche = ["cricinfo", "yahoosports", "footballitalia", "marca_en", "skynews"]
         for name in expected_niche:
+            assert name in feeds, f"Missing feed '{name}' in rss_feeds.yaml"
+        # Spot-check Phase A gap-fill round (15 feeds across 6 gap categories)
+        expected_phase_a = [
+            "nhc_atlantic", "nhc_outlook", "spc_severe",          # weather
+            "dotesports", "dexerto",                              # esports
+            "politico_eu", "euractiv", "europarl",                # political intl
+            "euronews", "foreignpolicy",                          # geopolitical
+            "sec_press", "scotusblog",                            # regulatory
+            "billboard", "hollywoodreporter", "polygon",          # cultural
+        ]
+        for name in expected_phase_a:
             assert name in feeds, f"Missing feed '{name}' in rss_feeds.yaml"

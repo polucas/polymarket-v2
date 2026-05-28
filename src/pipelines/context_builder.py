@@ -101,12 +101,12 @@ def build_grok_context(
     orderbook: OrderBook,
 ) -> str:
     """Build the context prompt for Grok LLM call."""
-    # Merge and sort signals by credibility, take top 7
+    # Merge and sort signals by credibility, take top 10
     all_signals = sorted(
         twitter_signals + rss_signals,
         key=lambda s: s.credibility,
         reverse=True,
-    )[:7]
+    )[:10]
 
     # Orderbook depth and skew
     total_bids = sum(l.size for l in orderbook.bids) if orderbook.bids else 0
@@ -168,8 +168,8 @@ def build_prescreen_context(
     ob_depth = total_bids + total_asks
     ob_skew = (total_bids - total_asks) / max(ob_depth, 1) if ob_depth > 0 else 0
 
-    # Top 3 RSS signals only
-    top_rss = sorted(rss_signals, key=lambda s: s.credibility, reverse=True)[:3]
+    # Top 5 RSS signals only
+    top_rss = sorted(rss_signals, key=lambda s: s.credibility, reverse=True)[:5]
     signal_lines = []
     for i, s in enumerate(top_rss, 1):
         age_str = _format_signal_age(s)

@@ -239,21 +239,19 @@ class TestBuildGrokContext:
         assert "0.6200" in ctx
         assert "0.3800" in ctx
 
-    def test_signals_sorted_by_credibility_top_7(self):
-        """Signals should be sorted by credibility descending, top 7 only."""
+    def test_signals_sorted_by_credibility_top_10(self):
+        """Signals should be sorted by credibility descending, top 10 only."""
         market = _make_market()
         signals = [
-            _make_signal(content=f"Signal {i} unique_{i}", credibility=0.1 * i, author=f"auth{i}")
-            for i in range(1, 11)  # 10 signals
+            _make_signal(content=f"Signal {i} unique_{i}", credibility=0.05 * i, author=f"auth{i}")
+            for i in range(1, 14)  # 13 signals (cred 0.05..0.65)
         ]
         ctx = build_grok_context(market, signals, [], _make_orderbook())
 
-        # Highest credibility is 1.0 (i=10), lowest included is 0.4 (i=4)
-        # The top 7: i=10,9,8,7,6,5,4
-        assert "unique_10" in ctx
-        assert "unique_9" in ctx
+        # Top 10 by credibility: i=13..4 (cred 0.65..0.20). i=3 (0.15) is excluded.
+        assert "unique_13" in ctx
         assert "unique_4" in ctx
-        # i=3 (0.3 cred) should be excluded
+        # i=3 (0.15 cred) should be excluded
         assert "unique_3" not in ctx
 
     def test_output_contains_orderbook_depth_and_skew(self):
@@ -442,18 +440,18 @@ class TestBuildPrescreenContext:
         assert "FAST SCREEN" in ctx
         assert market.question in ctx
 
-    def test_max_3_rss_signals(self):
-        """Pre-screen caps at 3 RSS signals."""
+    def test_max_5_rss_signals(self):
+        """Pre-screen caps at 5 RSS signals."""
         market = _make_market()
         signals = [
             _make_signal(content=f"RSS signal {i}", credibility=0.1 * i, source="rss")
-            for i in range(1, 8)  # 7 signals
+            for i in range(1, 10)  # 9 signals
         ]
         ctx = build_prescreen_context(market, signals, _make_orderbook())
-        # Count signal lines (numbered 1., 2., 3.)
+        # Count signal lines (numbered 1., 2., 3., 4., 5.)
         assert "  1." in ctx
-        assert "  3." in ctx
-        assert "  4." not in ctx
+        assert "  5." in ctx
+        assert "  6." not in ctx
 
     def test_prescreen_contains_prices(self):
         market = _make_market(yes_price=0.75, no_price=0.25)
