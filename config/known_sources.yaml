@@ -81,6 +81,11 @@ institutional_media:
     - "variety.com"         # Entertainment
     - "deadline.com"        # Entertainment
     - "engadget.com"        # Tech
+    - "cricinfo.com"        # Cricket (covers IPL, T20, etc.)
+    - "yahoo.com"           # Yahoo Sports general sports
+    - "football-italia.net" # Italian Serie A football
+    - "marca.com"           # Spanish football (English edition)
+    - "skynews.com"         # UK general news
 
 expert_bio_keywords:
   - journalist

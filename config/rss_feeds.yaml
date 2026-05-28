@@ -71,3 +71,18 @@ feeds:
   skysports:
     url: "https://www.skysports.com/rss/12040"
     domain: "skysports.com"
+  cricinfo:
+    url: "https://static.cricinfo.com/rss/livescores.xml"
+    domain: "cricinfo.com"
+  yahoosports:
+    url: "https://sports.yahoo.com/rss"
+    domain: "yahoo.com"
+  footballitalia:
+    url: "https://www.football-italia.net/rss.xml"
+    domain: "football-italia.net"
+  marca_en:
+    url: "https://www.marca.com/en/rss/portada.xml"
+    domain: "marca.com"
+  skynews:
+    url: "https://feeds.skynews.com/feeds/rss/home.xml"
+    domain: "skynews.com"

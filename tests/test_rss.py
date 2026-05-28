@@ -706,16 +706,20 @@ class TestConfigurableSettings:
 
 
 class TestYamlFeedCount:
-    """After F6 expansion the config/rss_feeds.yaml must contain exactly 24 feeds."""
+    """Tracks rss_feeds.yaml expansions. Update count when adding new feeds."""
 
-    def test_yaml_loads_24_feeds(self):
-        """24 feeds total after F6 expansion (was 12)."""
+    def test_yaml_loads_expected_feed_count(self):
+        """29 feeds total after F6 (12 → 24) + niche-coverage round (24 → 29)."""
         feeds = _load_feed_config()
-        assert len(feeds) == 24, f"Expected 24 feeds, got {len(feeds)}: {list(feeds.keys())}"
-        # Spot-check every new F6 entry is present
-        expected_new = [
+        assert len(feeds) == 29, f"Expected 29 feeds, got {len(feeds)}: {list(feeds.keys())}"
+        # Spot-check every F6 entry is present
+        expected_f6 = [
             "bbcsport", "espn_nba", "espn_nfl", "espn_mlb", "espn_nhl", "espn_soccer",
             "hltv", "marketwatch", "variety", "deadline", "engadget", "skysports",
         ]
-        for name in expected_new:
+        for name in expected_f6:
+            assert name in feeds, f"Missing feed '{name}' in rss_feeds.yaml"
+        # Spot-check niche-coverage round
+        expected_niche = ["cricinfo", "yahoosports", "footballitalia", "marca_en", "skynews"]
+        for name in expected_niche:
             assert name in feeds, f"Missing feed '{name}' in rss_feeds.yaml"
