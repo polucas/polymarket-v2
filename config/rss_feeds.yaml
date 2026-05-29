@@ -112,7 +112,7 @@ feeds:
     url: "https://www.euractiv.com/feed"
     domain: "euractiv.com"
   europarl:
-    url: "https://www.europarl.europa.eu/rss/en/pressroom.rss"
+    url: "https://www.europarl.europa.eu/rss/doc/press-releases/en.xml"
     domain: "europarl.europa.eu"
   # Geopolitical — fills wire/analysis gap
   euronews:

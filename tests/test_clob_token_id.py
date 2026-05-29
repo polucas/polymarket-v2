@@ -21,7 +21,7 @@ def _make_gamma_market(**overrides):
         "outcomePrices": '["0.55", "0.45"]',
         "endDate": (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "liquidity": "20000",
-        "volume24hr": "5000",
+        "volume24hr": "25000",
         "outcomes": '["Yes", "No"]',
         "clobTokenIds": '["111222333444555", "666777888999000"]',
         "closed": False,
@@ -41,6 +41,7 @@ class TestClobTokenIdExtraction:
         settings.MIN_TRADEABLE_PRICE = 0.05
         settings.MAX_TRADEABLE_PRICE = 0.95
         settings.MIN_HOURS_TO_RESOLUTION = 0.25
+        settings.MIN_MARKET_VOLUME_24H = 0.0
         client = PolymarketClient(settings)
 
         mock_resp = MagicMock()
@@ -71,6 +72,7 @@ class TestClobTokenIdExtraction:
         settings.MIN_TRADEABLE_PRICE = 0.05
         settings.MAX_TRADEABLE_PRICE = 0.95
         settings.MIN_HOURS_TO_RESOLUTION = 0.25
+        settings.MIN_MARKET_VOLUME_24H = 0.0
         client = PolymarketClient(settings)
 
         mock_resp = MagicMock()

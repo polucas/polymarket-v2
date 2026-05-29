@@ -8,6 +8,7 @@ entry limits, and the signal accumulator (poll_and_accumulate / consume_signals)
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import List
@@ -67,6 +68,49 @@ def _build_pipeline(feeds: dict | None = None) -> RSSPipeline:
         return RSSPipeline()
 
 
+def _make_httpx_mock(feed_for_url=None, raise_for_url=None):
+    """Return a patchable httpx.AsyncClient mock.
+
+    feed_for_url: callable(url) -> feedparser feed object (used by feedparser.parse mock)
+    raise_for_url: callable(url) -> bool, if True raises httpx.HTTPStatusError for that URL
+
+    Usage:
+        mock_client, feedparser_side_effect = _make_httpx_mock(feed_for_url=lambda u: my_feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=feedparser_side_effect):
+                ...
+    """
+    captured_urls = {}
+
+    def _feedparser_side_effect(content):
+        # feedparser.parse is called with resp.content (bytes); look up which url produced it
+        url = captured_urls.get(id(content))
+        if feed_for_url is not None:
+            return feed_for_url(url)
+        return _make_feed([])
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+
+    class _FakeContent(bytes):
+        pass
+
+    async def _mock_get(url, **kwargs):
+        if raise_for_url and raise_for_url(url):
+            raise Exception("Network error")
+        content = _FakeContent()
+        captured_urls[id(content)] = url
+        mock_response.content = content
+        return mock_response
+
+    mock_client = AsyncMock()
+    mock_client.get = _mock_get
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    return mock_client, _feedparser_side_effect
+
+
 # ---------------------------------------------------------------------------
 # Test: Fresh headlines produce signals
 # ---------------------------------------------------------------------------
@@ -84,14 +128,16 @@ class TestFreshHeadlines:
         reuters_feed = _make_feed([_make_entry("US Fed raises rates", now_iso)])
         bbc_feed = _make_feed([_make_entry("UK election update", now_iso)])
 
-        def mock_parse(url):
-            if "reuters" in url:
+        def feed_for_url(url):
+            if url and "reuters" in url:
                 return reuters_feed
             return bbc_feed
 
-        with patch("feedparser.parse", side_effect=mock_parse):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
-                signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=feed_for_url)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
+                    signals = await pipeline.get_breaking_news()
 
         assert len(signals) == 2
         assert all(isinstance(s, Signal) for s in signals)
@@ -113,9 +159,11 @@ class TestSignalFields:
 
         feed = _make_feed([_make_entry("Test headline", now_iso)])
 
-        with patch("feedparser.parse", return_value=feed):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
-                signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
+                    signals = await pipeline.get_breaking_news()
 
         for sig in signals:
             assert sig.source == "rss"
@@ -138,10 +186,12 @@ class TestDeduplication:
 
         feed = _make_feed([_make_entry("Repeated headline", now_iso)])
 
-        with patch("feedparser.parse", return_value=feed):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
-                signals_first = await pipeline.get_breaking_news()
-                signals_second = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
+                    signals_first = await pipeline.get_breaking_news()
+                    signals_second = await pipeline.get_breaking_news()
 
         assert len(signals_first) >= 1
         # On the second call, the headline is already seen, so filtered out
@@ -162,16 +212,18 @@ class TestDeduplication:
 
         call_count = {"n": 0}
 
-        def mock_parse(url):
+        def feed_for_url_calls(url):
             call_count["n"] += 1
             if call_count["n"] <= len(_TEST_FEEDS):
                 return feed_call1
             return feed_call2
 
-        with patch("feedparser.parse", side_effect=mock_parse):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
-                await pipeline.get_breaking_news()
-                signals_second = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=feed_for_url_calls)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
+                    await pipeline.get_breaking_news()
+                    signals_second = await pipeline.get_breaking_news()
 
         contents = [s.content for s in signals_second]
         assert "Second headline" in contents
@@ -193,9 +245,11 @@ class TestOldHeadlineExclusion:
 
         feed = _make_feed([_make_entry("Old headline", thirteen_hours_ago)])
 
-        with patch("feedparser.parse", return_value=feed):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
-                signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
+                    signals = await pipeline.get_breaking_news()
 
         contents = [s.content for s in signals]
         assert "Old headline" not in contents
@@ -208,9 +262,11 @@ class TestOldHeadlineExclusion:
 
         feed = _make_feed([_make_entry("Recent headline", one_hour_ago)])
 
-        with patch("feedparser.parse", return_value=feed):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
-                signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
+                    signals = await pipeline.get_breaking_news()
 
         contents = [s.content for s in signals]
         assert "Recent headline" in contents
@@ -282,9 +338,11 @@ class TestSourceTierByDomain:
         now_iso = datetime.now(timezone.utc).isoformat()
         feed = _make_feed([_make_entry("Reuters headline", now_iso)])
 
-        with patch("feedparser.parse", return_value=feed):
-            # Use the real classifier -- reuters.com is in known_sources.yaml as wire_services
-            signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                # Use the real classifier -- reuters.com is in known_sources.yaml as wire_services
+                signals = await pipeline.get_breaking_news()
 
         assert len(signals) == 1
         assert signals[0].source_tier == "S2"
@@ -302,9 +360,11 @@ class TestSourceTierByDomain:
         now_iso = datetime.now(timezone.utc).isoformat()
         feed = _make_feed([_make_entry("BBC headline", now_iso)])
 
-        with patch("feedparser.parse", return_value=feed):
-            # Use the real classifier -- bbc.com is in known_sources.yaml as institutional_media
-            signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                # Use the real classifier -- bbc.com is in known_sources.yaml as institutional_media
+                signals = await pipeline.get_breaking_news()
 
         assert len(signals) == 1
         assert signals[0].source_tier == "S3"
@@ -322,8 +382,10 @@ class TestSourceTierByDomain:
         now_iso = datetime.now(timezone.utc).isoformat()
         feed = _make_feed([_make_entry("Blog headline", now_iso)])
 
-        with patch("feedparser.parse", return_value=feed):
-            signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                signals = await pipeline.get_breaking_news()
 
         assert len(signals) == 1
         assert signals[0].source_tier == "S6"
@@ -354,17 +416,17 @@ class TestFeedParseFailure:
         now_iso = datetime.now(timezone.utc).isoformat()
         good_feed = _make_feed([_make_entry("Good headline", now_iso)])
 
-        call_count = {"n": 0}
-
-        def mock_parse(url):
-            call_count["n"] += 1
-            if "broken" in url:
-                raise Exception("Network error")
+        def feed_for_url(url):
             return good_feed
 
-        with patch("feedparser.parse", side_effect=mock_parse):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
-                signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(
+            feed_for_url=feed_for_url,
+            raise_for_url=lambda url: "broken" in url,
+        )
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
+                    signals = await pipeline.get_breaking_news()
 
         # The good feed's signal should still come through
         assert len(signals) >= 1
@@ -395,9 +457,11 @@ class TestMaxEntriesPerFeed:
         entries = [_make_entry(f"Headline {i}", now_iso) for i in range(30)]
         feed = _make_feed(entries)
 
-        with patch("feedparser.parse", return_value=feed):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
-                signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
+                    signals = await pipeline.get_breaking_news()
 
         # Only the first 25 entries (default RSS_ENTRIES_PER_FEED) should be processed
         assert len(signals) <= 25
@@ -417,9 +481,11 @@ class TestMaxEntriesPerFeed:
         entries = [_make_entry(f"Headline {i}", now_iso) for i in range(5)]
         feed = _make_feed(entries)
 
-        with patch("feedparser.parse", return_value=feed):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
-                signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
+                    signals = await pipeline.get_breaking_news()
 
         assert len(signals) == 5
 
@@ -442,9 +508,11 @@ class TestHeadlineReappearanceAfterPrune:
 
         feed = _make_feed([_make_entry("Reappearing headline", now_iso)])
 
-        with patch("feedparser.parse", return_value=feed):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
-                signals_first = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
+                    signals_first = await pipeline.get_breaking_news()
 
         # Headline should be seen in the first call
         assert any(s.content == "Reappearing headline" for s in signals_first)
@@ -457,9 +525,11 @@ class TestHeadlineReappearanceAfterPrune:
         assert "Reappearing headline" not in pipeline.seen_headlines
 
         # Now the headline should come through again
-        with patch("feedparser.parse", return_value=feed):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
-                signals_again = await pipeline.get_breaking_news()
+        mock_client2, fp_side_effect2 = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client2):
+            with patch("feedparser.parse", side_effect=fp_side_effect2):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S3"):
+                    signals_again = await pipeline.get_breaking_news()
 
         assert any(s.content == "Reappearing headline" for s in signals_again)
 
@@ -496,9 +566,11 @@ class TestHeadlineNoPublishedDate:
         entry = _make_entry_no_published("No-date headline")
         feed = _make_feed([entry])
 
-        with patch("feedparser.parse", return_value=feed):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
-                signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
+                    signals = await pipeline.get_breaking_news()
 
         # The entry should be included since _parse_date returns None for missing
         # published field, and the code skips the age check when published is None.
@@ -560,9 +632,11 @@ class TestCoindeskSourceTier:
         now_iso = datetime.now(timezone.utc).isoformat()
         feed = _make_feed([_make_entry("Crypto market update", now_iso)])
 
-        with patch("feedparser.parse", return_value=feed):
-            # Use the real classifier -- coindesk.com is in known_sources.yaml as institutional_media
-            signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                # Use the real classifier -- coindesk.com is in known_sources.yaml as institutional_media
+                signals = await pipeline.get_breaking_news()
 
         assert len(signals) == 1
         assert signals[0].source_tier == "S3"
@@ -588,9 +662,11 @@ class TestEmptyFeedEntries:
         pipeline = _build_pipeline(feeds)
         feed = _make_feed([])  # Empty entries list
 
-        with patch("feedparser.parse", return_value=feed):
-            with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
-                signals = await pipeline.get_breaking_news()
+        mock_client, fp_side_effect = _make_httpx_mock(feed_for_url=lambda u: feed)
+        with patch("src.pipelines.rss.httpx.AsyncClient", return_value=mock_client):
+            with patch("feedparser.parse", side_effect=fp_side_effect):
+                with patch("src.pipelines.rss.classify_source_tier", return_value="S6"):
+                    signals = await pipeline.get_breaking_news()
 
         assert len(signals) == 0
 

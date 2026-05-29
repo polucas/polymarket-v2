@@ -181,6 +181,10 @@ class PolymarketClient:
                     filtered_price_range += 1
                     continue
 
+                # Volume floor — skip hyper-niche markets with negligible trading activity
+                if volume_24h < self._settings.MIN_MARKET_VOLUME_24H:
+                    continue
+
                 markets.append(market)
             except Exception as e:
                 log.warning("market_parse_error", error=str(e), market_id=m.get("id"))

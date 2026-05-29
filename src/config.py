@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     RSS_POLL_INTERVAL_SECONDS: int = 30
     RSS_MAX_AGE_HOURS: float = 12.0       # Drop RSS items older than this (cutoff for both per-poll filter and cached signal prune)
     RSS_ENTRIES_PER_FEED: int = 25        # Top N entries per feed per poll (was hardcoded 10)
+    RSS_USER_AGENT: str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     # Tier 1 Config
     TIER1_SCAN_INTERVAL_MINUTES: int = 15
@@ -74,6 +75,7 @@ class Settings(BaseSettings):
     # Market Price Filter
     MIN_TRADEABLE_PRICE: float = 0.05   # Skip markets with YES < 5%
     MAX_TRADEABLE_PRICE: float = 0.95   # Skip markets with YES > 95%
+    MIN_MARKET_VOLUME_24H: float = 20000.0  # Skip markets with 24h volume below this threshold
 
     # Duplicate Prevention
     MARKET_COOLDOWN_HOURS: float = 24.0

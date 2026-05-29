@@ -31,7 +31,7 @@ def _make_raw_market(
     end_date: str | None = None,
     hours_ahead: float = 6.0,
     liquidity: float = 10_000.0,
-    volume_24h: float = 5_000.0,
+    volume_24h: float = 25_000.0,
     closed: bool = False,
     resolved: bool = False,
     resolution_prices: dict | None = None,
@@ -114,7 +114,7 @@ class TestGetActiveMarketsTier1:
                 outcome_prices=[0.60, 0.40],
                 hours_ahead=12.0,
                 liquidity=20_000,
-                volume_24h=8_000,
+                volume_24h=30_000,
             ),
         ]
         mock_resp = _mock_response(json_data=raw)
@@ -137,7 +137,7 @@ class TestGetActiveMarketsTier1:
         assert m.market_type == "political"
         assert m.fee_rate == 0.0
         assert m.liquidity == 20_000.0
-        assert m.volume_24h == 8_000.0
+        assert m.volume_24h == 30_000.0
         assert m.resolved is False
         assert m.resolution is None
         assert isinstance(m.keywords, list)
@@ -192,6 +192,47 @@ class TestGetActiveMarketsTier1:
             markets = await client.get_active_markets(tier=1)
 
         assert len(markets) == 0
+
+    @pytest.mark.asyncio
+    async def test_tier1_excludes_low_volume_24h(self):
+        """Markets with volume_24h < MIN_MARKET_VOLUME_24H are excluded from tier 1."""
+        # Use explicit settings so MIN_MARKET_VOLUME_24H is 20000 (default)
+        settings = _make_settings()
+        client = PolymarketClient(settings)
+
+        raw = [
+            _make_raw_market(hours_ahead=6.0, liquidity=10_000, volume_24h=5_000),
+        ]
+        mock_resp = _mock_response(json_data=raw)
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_resp)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
+            markets = await client.get_active_markets(tier=1)
+
+        assert len(markets) == 0
+
+    @pytest.mark.asyncio
+    async def test_tier1_includes_market_above_volume_floor(self):
+        """Markets with volume_24h >= MIN_MARKET_VOLUME_24H pass the volume filter."""
+        settings = _make_settings()
+        client = PolymarketClient(settings)
+
+        raw = [
+            _make_raw_market(hours_ahead=6.0, liquidity=10_000, volume_24h=25_000),
+        ]
+        mock_resp = _mock_response(json_data=raw)
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_resp)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.pipelines.polymarket.httpx.AsyncClient", return_value=mock_client_instance):
+            markets = await client.get_active_markets(tier=1)
+
+        assert len(markets) == 1
 
 
 # ---------------------------------------------------------------------------

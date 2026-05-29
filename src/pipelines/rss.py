@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 import feedparser
+import httpx
 import structlog
 import yaml
 from pathlib import Path
@@ -89,7 +90,14 @@ class RSSPipeline:
 
         for feed_name, cfg in self._feeds.items():
             try:
-                feed = feedparser.parse(cfg["url"])
+                async with httpx.AsyncClient(
+                    headers={"User-Agent": self.settings.RSS_USER_AGENT},
+                    follow_redirects=True,
+                    timeout=10.0,
+                ) as client:
+                    resp = await client.get(cfg["url"])
+                    resp.raise_for_status()
+                    feed = feedparser.parse(resp.content)
                 for entry in feed.entries[:self.settings.RSS_ENTRIES_PER_FEED]:
                     headline = entry.title.strip()
                     if headline in self.seen_headlines:
