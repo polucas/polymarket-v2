@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     TAKE_PROFIT_ROI: float = 0.20
     STOP_LOSS_ROI: float = -0.15
     STOP_LOSS_ENABLED: bool = True   # Set False to disable SL execution while keeping TP (research/A-B)
+    TAKE_PROFIT_ENABLED: bool = True   # Set False to disable TP execution (research/A-B vs natural resolution)
     EARLY_EXIT_ENABLED: bool = True
     TRADE_SNAPSHOT_INTERVAL_SECONDS: int = 30  # Min seconds between price snapshots per trade
     FAST_EXIT_POLL_INTERVAL_SECONDS: int = 60

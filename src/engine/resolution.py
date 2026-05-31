@@ -224,7 +224,7 @@ async def check_early_exits(
             roi = calculate_unrealized_roi(trade, current_price)
 
             exit_type = None
-            if roi >= settings.TAKE_PROFIT_ROI:
+            if settings.TAKE_PROFIT_ENABLED and roi >= settings.TAKE_PROFIT_ROI:
                 exit_type = "take_profit"
             elif settings.STOP_LOSS_ENABLED and roi <= settings.STOP_LOSS_ROI:
                 exit_type = "stop_loss"

@@ -70,6 +70,7 @@ def _build_manager(trades=None, portfolio=None):
     settings.TAKE_PROFIT_ROI = 0.20
     settings.STOP_LOSS_ROI = -0.15
     settings.STOP_LOSS_ENABLED = True
+    settings.TAKE_PROFIT_ENABLED = True
     settings.TRADE_SNAPSHOT_INTERVAL_SECONDS = 30
     settings.ENVIRONMENT = "paper"
     settings.TELEGRAM_BOT_TOKEN = ""
@@ -791,6 +792,23 @@ class TestStopLossEnabled:
         mgr.db.update_trade.assert_called_once()
         updated = mgr.db.update_trade.call_args[0][0]
         assert updated.exit_type == "stop_loss"
+
+    @pytest.mark.asyncio
+    async def test_take_profit_disabled_skips_tp_fire(self):
+        """When TAKE_PROFIT_ENABLED=False, ROI >= TAKE_PROFIT_ROI does NOT trigger exit."""
+        trade = _make_trade(entry_price=0.50)
+        mgr = _build_manager(trades=[trade])
+        mgr.settings.TAKE_PROFIT_ENABLED = False
+        mgr._active_positions = {trade.clob_token_id_yes: trade}
+
+        ws_message = [{
+            "event_type": "book",
+            "asset_id": trade.clob_token_id_yes,
+            "bids": [{"price": "0.70", "size": "100"}],  # ROI ~+40%, normally fires TP
+            "asks": [],
+        }]
+        await mgr._handle_message(ws_message)
+        mgr.db.update_trade.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

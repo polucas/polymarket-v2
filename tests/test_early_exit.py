@@ -269,3 +269,33 @@ class TestCheckEarlyExits:
         await check_early_exits(mock_db, mock_poly, settings)
 
         mock_db.update_trade.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_take_profit_disabled_in_check_early_exits(self):
+        """When TAKE_PROFIT_ENABLED=False, check_early_exits does not trigger TP exit."""
+        trade = _make_trade(action="BUY_YES", entry_price=0.50, size=100)
+
+        mock_market = MagicMock()
+        mock_market.resolved = False
+        mock_market.yes_price = 0.65  # ROI = 30% > 20% TP threshold — would fire if enabled
+
+        mock_db = AsyncMock()
+        mock_db.get_open_trades = AsyncMock(return_value=[trade])
+        mock_db.load_portfolio = AsyncMock(return_value=MagicMock(
+            total_pnl=0, cash_balance=9900, open_positions=[], total_equity=10000,
+            peak_equity=10000, max_drawdown=0))
+        mock_db.update_trade = AsyncMock()
+
+        mock_poly = AsyncMock()
+        mock_poly.get_market = AsyncMock(return_value=mock_market)
+
+        settings = MagicMock()
+        settings.EARLY_EXIT_ENABLED = True
+        settings.TAKE_PROFIT_ROI = 0.20
+        settings.STOP_LOSS_ROI = -0.15
+        settings.TAKE_PROFIT_ENABLED = False
+        settings.STOP_LOSS_ENABLED = True
+
+        await check_early_exits(mock_db, mock_poly, settings)
+
+        mock_db.update_trade.assert_not_called()

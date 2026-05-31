@@ -279,7 +279,7 @@ class RealTimeExitManager:
             # Record price snapshot for retrospective SL analysis
             await self._maybe_record_snapshot(trade, best_bid, roi, source="ws")
 
-            if roi >= self.settings.TAKE_PROFIT_ROI:
+            if self.settings.TAKE_PROFIT_ENABLED and roi >= self.settings.TAKE_PROFIT_ROI:
                 await self._trigger_exit(trade, best_bid, "take_profit")
             elif self.settings.STOP_LOSS_ENABLED and roi <= self.settings.STOP_LOSS_ROI:
                 await self._trigger_exit(trade, best_bid, "stop_loss")
