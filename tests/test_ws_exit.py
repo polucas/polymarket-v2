@@ -375,9 +375,9 @@ class TestPortfolioUpdate:
 
         mgr.db.save_portfolio.assert_called_once()
         saved_portfolio = mgr.db.save_portfolio.call_args[0][0]
-        # PnL = 100 * (0.65/0.50 - 1) = 30
-        assert saved_portfolio.total_pnl == pytest.approx(30.0)
-        assert saved_portfolio.cash_balance == pytest.approx(9900.0 + 100.0 + 30.0)
+        # gross PnL = 100 * (0.65/0.50 - 1) = 30; fee = 100 * 0.02 = 2; net = 28
+        assert saved_portfolio.total_pnl == pytest.approx(28.0)
+        assert saved_portfolio.cash_balance == pytest.approx(9900.0 + 100.0 + 28.0)
 
 
 # ---------------------------------------------------------------------------

@@ -165,18 +165,23 @@ def calculate_early_exit_pnl(record: TradeRecord, exit_price: float) -> float:
     BUY_NO:  Bought NO shares at (1-entry_price). Each dollar buys 1/(1-entry_price) shares.
              NO share value at exit = (1-exit_price).
              PnL = position * ((1-exit_price)/(1-entry_price) - 1)
+
+    Fees: subtracted only on winning exits (mirrors calculate_pnl convention).
     """
     entry = record.market_price_at_decision
     size = record.position_size_usd
+    fee = size * record.fee_rate
 
     if record.action == "BUY_YES":
         if entry <= 0:
             return 0.0
-        return size * (exit_price / entry - 1.0)
+        gross_pnl = size * (exit_price / entry - 1.0)
+        return gross_pnl - fee if gross_pnl > 0 else gross_pnl
     elif record.action == "BUY_NO":
         if entry >= 1.0:
             return 0.0
-        return size * ((1.0 - exit_price) / (1.0 - entry) - 1.0)
+        gross_pnl = size * ((1.0 - exit_price) / (1.0 - entry) - 1.0)
+        return gross_pnl - fee if gross_pnl > 0 else gross_pnl
     return 0.0
 
 

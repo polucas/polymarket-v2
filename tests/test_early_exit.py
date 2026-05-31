@@ -10,7 +10,7 @@ from src.engine.resolution import (
 from src.models import TradeRecord
 
 
-def _make_trade(action="BUY_YES", entry_price=0.50, size=100.0) -> TradeRecord:
+def _make_trade(action="BUY_YES", entry_price=0.50, size=100.0, fee_rate=0.0) -> TradeRecord:
     return TradeRecord(
         record_id="test-001",
         experiment_run="exp-001",
@@ -28,6 +28,7 @@ def _make_trade(action="BUY_YES", entry_price=0.50, size=100.0) -> TradeRecord:
         action=action,
         position_size_usd=size,
         market_price_at_decision=entry_price,
+        fee_rate=fee_rate,
     )
 
 
@@ -65,6 +66,41 @@ class TestCalculateEarlyExitPnl:
         trade = _make_trade(action="SKIP")
         pnl = calculate_early_exit_pnl(trade, exit_price=0.70)
         assert pnl == 0.0
+
+    def test_buy_yes_fee_deducted_on_win(self):
+        """Winning early exit subtracts fee_rate * position_size."""
+        trade = _make_trade(action="BUY_YES", entry_price=0.50, size=100.0, fee_rate=0.02)
+        pnl = calculate_early_exit_pnl(trade, exit_price=0.70)
+        # gross = 100 * (0.70/0.50 - 1) = 40
+        # fee = 100 * 0.02 = 2
+        # net = 38
+        assert abs(pnl - 38.0) < 1e-9
+
+    def test_buy_yes_no_fee_on_loss(self):
+        """Losing early exit pays NO fee (matches calculate_pnl convention)."""
+        trade = _make_trade(action="BUY_YES", entry_price=0.50, size=100.0, fee_rate=0.02)
+        pnl = calculate_early_exit_pnl(trade, exit_price=0.30)
+        # gross = 100 * (0.30/0.50 - 1) = -40
+        # No fee on loss
+        assert abs(pnl - (-40.0)) < 1e-9
+
+    def test_buy_no_fee_deducted_on_win(self):
+        """Winning BUY_NO early exit subtracts fee_rate * position_size."""
+        trade = _make_trade(action="BUY_NO", entry_price=0.60, size=100.0, fee_rate=0.02)
+        # bought NO at 0.40, exit at 0.30 means NO worth (1-0.30)=0.70 → win
+        pnl = calculate_early_exit_pnl(trade, exit_price=0.30)
+        # gross = 100 * ((1-0.30)/(1-0.60) - 1) = 100 * (0.70/0.40 - 1) = 75
+        # fee = 100 * 0.02 = 2
+        # net = 73
+        assert abs(pnl - 73.0) < 1e-9
+
+    def test_buy_no_no_fee_on_loss(self):
+        """Losing BUY_NO early exit pays NO fee."""
+        trade = _make_trade(action="BUY_NO", entry_price=0.60, size=100.0, fee_rate=0.02)
+        # bought NO at 0.40, exit at 0.80 means NO worth 0.20 → loss
+        pnl = calculate_early_exit_pnl(trade, exit_price=0.80)
+        # gross = 100 * (0.20/0.40 - 1) = -50
+        assert abs(pnl - (-50.0)) < 1e-9
 
 
 class TestCalculateUnrealizedRoi:
