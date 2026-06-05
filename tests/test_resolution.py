@@ -50,10 +50,10 @@ def _make_record(**overrides) -> TradeRecord:
 
 
 class TestBuyYesPnl:
-    """BUY_YES: win = size*(1-price) - size*fee, lose = -size."""
+    """BUY_YES: win = pos*(1-entry)/entry - fee, lose = -pos."""
 
     def test_buy_yes_outcome_yes_positive_pnl(self):
-        """BUY_YES + YES outcome -> profit."""
+        """BUY_YES + YES outcome -> profit (cost-based)."""
         record = _make_record(
             action="BUY_YES",
             position_size_usd=200.0,
@@ -61,8 +61,8 @@ class TestBuyYesPnl:
             fee_rate=0.02,
         )
         pnl = calculate_pnl(record, outcome=True)
-        # 200 * (1 - 0.60) - 200 * 0.02 = 80 - 4 = 76
-        expected = 200.0 * (1.0 - 0.60) - (200.0 * 0.02)
+        # shares = 200/0.60 = 333.33; gross = 333.33 - 200 = 133.33; net = 133.33 - 4 = 129.33
+        expected = 200.0 * (1.0 - 0.60) / 0.60 - (200.0 * 0.02)
         assert abs(pnl - expected) < 1e-9
         assert pnl > 0
 
@@ -77,10 +77,10 @@ class TestBuyYesPnl:
 
 
 class TestBuyNoPnl:
-    """BUY_NO: win = size*price - size*fee, lose = -size."""
+    """BUY_NO: win = pos*entry/(1-entry) - fee, lose = -pos."""
 
     def test_buy_no_outcome_no_positive_pnl(self):
-        """BUY_NO + NO outcome -> profit."""
+        """BUY_NO + NO outcome -> profit (cost-based)."""
         record = _make_record(
             action="BUY_NO",
             position_size_usd=200.0,
@@ -88,8 +88,8 @@ class TestBuyNoPnl:
             fee_rate=0.02,
         )
         pnl = calculate_pnl(record, outcome=False)
-        # 200 * 0.60 - 200 * 0.02 = 120 - 4 = 116
-        expected = 200.0 * 0.60 - (200.0 * 0.02)
+        # shares = 200/0.40 = 500; gross = 500 - 200 = 300; net = 300 - 4 = 296
+        expected = 200.0 * 0.60 / (1.0 - 0.60) - (200.0 * 0.02)
         assert abs(pnl - expected) < 1e-9
         assert pnl > 0
 
@@ -119,8 +119,38 @@ class TestEdgeCases:
             fee_rate=0.0,
         )
         pnl = calculate_pnl(record, outcome=True)
-        # 100 * 0.50 - 0 = 50
-        assert abs(pnl - 50.0) < 1e-9
+        # shares = 100/0.50 = 200; gross = 200 - 100 = 100; fee = 0
+        assert abs(pnl - 100.0) < 1e-9
+
+
+class TestCostBasedKnownValues:
+    """Verify cost-based formula with known arithmetic."""
+
+    def test_buy_yes_win_cost_based_known(self):
+        """100 USD at entry 0.50 fee 2% → 200 shares × $1 - 100 = 100 gross - 2 fee = 98."""
+        record = _make_record(action="BUY_YES", position_size_usd=100.0,
+                              market_price_at_decision=0.50, fee_rate=0.02)
+        pnl = calculate_pnl(record, outcome=True)
+        assert abs(pnl - 98.0) < 1e-9
+
+    def test_buy_no_win_cost_based_known(self):
+        """100 USD at YES=0.15 fee 2%: NO@0.85, shares=117.65, pnl=17.647-2=15.647."""
+        record = _make_record(action="BUY_NO", position_size_usd=100.0,
+                              market_price_at_decision=0.15, fee_rate=0.02)
+        pnl = calculate_pnl(record, outcome=False)
+        expected = 100.0 * 0.15 / 0.85 - 2.0
+        assert abs(pnl - expected) < 1e-9
+
+    def test_buy_yes_loss_unchanged(self):
+        """Losses still return -position_size."""
+        record = _make_record(action="BUY_YES", position_size_usd=100.0,
+                              market_price_at_decision=0.50, fee_rate=0.02)
+        assert calculate_pnl(record, outcome=False) == -100.0
+
+    def test_buy_no_loss_unchanged(self):
+        record = _make_record(action="BUY_NO", position_size_usd=100.0,
+                              market_price_at_decision=0.15, fee_rate=0.02)
+        assert calculate_pnl(record, outcome=True) == -100.0
 
 
 class TestHypotheticalPnl:
@@ -898,9 +928,9 @@ class TestAutoResolveUpdatesPortfolioForUnexited:
         await auto_resolve_trades(mock_db, mock_client)
 
         # pnl should be calculated (BUY_YES, YES outcome, entry=0.60, size=100, fee=0)
-        # pnl = 100*(1-0.60) - 0 = 40
+        # cost-based: pnl = 100*(1-0.60)/0.60 = 66.667
         assert trade.pnl is not None
-        assert trade.pnl == pytest.approx(40.0)
+        assert trade.pnl == pytest.approx(100.0 * (1.0 - 0.60) / 0.60)
 
         # trade_profitable and pnl_brier_* should be set
         assert trade.trade_profitable == 1

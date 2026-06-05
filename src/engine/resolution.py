@@ -13,19 +13,35 @@ log = structlog.get_logger()
 
 
 def calculate_pnl(record: TradeRecord, outcome: bool) -> float:
-    """Calculate PnL for a resolved trade.
-    outcome: True = YES, False = NO
+    """Calculate PnL for a resolved trade (cost-based; matches calculate_early_exit_pnl).
+
+    position_size_usd = dollars spent at entry.
+    shares = position_size_usd / share_price_at_entry.
+    On win, each share pays $1.
+
+    BUY_YES win:   shares = pos/entry,       pnl = pos*(1-entry)/entry
+    BUY_YES lose:  pnl = -pos (lose entire stake)
+    BUY_NO  win:   shares = pos/(1-entry),  pnl = pos*entry/(1-entry)
+    BUY_NO  lose:  pnl = -pos
+
+    Fee subtracted on wins only (mirrors calculate_early_exit_pnl convention).
     """
+    pos = record.position_size_usd
+    entry = record.market_price_at_decision
+    fee = pos * record.fee_rate
+
     if record.action == "BUY_YES":
         if outcome:
-            return record.position_size_usd * (1.0 - record.market_price_at_decision) - (record.position_size_usd * record.fee_rate)
-        else:
-            return -record.position_size_usd
+            if entry <= 0:
+                return 0.0
+            return pos * (1.0 - entry) / entry - fee
+        return -pos
     elif record.action == "BUY_NO":
         if not outcome:
-            return record.position_size_usd * record.market_price_at_decision - (record.position_size_usd * record.fee_rate)
-        else:
-            return -record.position_size_usd
+            if entry >= 1.0:
+                return 0.0
+            return pos * entry / (1.0 - entry) - fee
+        return -pos
     return 0.0
 
 
