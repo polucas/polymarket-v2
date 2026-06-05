@@ -124,7 +124,7 @@ Everything you need before writing a single line of code.
 | Account | URL | What For | Cost | Setup Notes |
 |---------|-----|----------|------|-------------|
 | **Polymarket** | https://polymarket.com | Trading (paper then live) | Free to create; funded via USDC on Polygon | Need wallet (MetaMask/Rabby). KYC may be required for withdrawals. |
-| **MiniMax API** | https://api.minimaxi.chat | LLM for probability estimation | Pay-as-you-go | API key needed. Model: configurable via `LLM_MODEL` env var (default: `MiniMax-M2.7`). |
+| **MiMo API** (Xiaomi) | https://api.xiaomimimo.com | LLM for probability estimation (OpenAI-compatible) | Pay-as-you-go | API key needed. Model: configurable via `LLM_MODEL` env var (default: `mimo-v2.5-pro`). Base URL via `LLM_BASE_URL`. |
 | **TwitterAPI.io** | https://twitterapi.io | Social signal ingestion | Pay-as-you-go (~$15.30/mo) | API key needed. Unofficial Twitter API proxy. |
 | **Hetzner Cloud** | https://console.hetzner.cloud | VPS hosting (24/7 operation) | €4.35/mo (CX22) | EU datacenter. See Section 2 for setup. |
 | **GitHub** | https://github.com | Code repository + CI | Free | Private repo recommended. |
@@ -135,7 +135,7 @@ Everything you need before writing a single line of code.
 After creating accounts, generate and securely store these keys:
 
 ```
-MINIMAX_API_KEY=sk-api-xxxxxxxxxxxxxxxxxxxx   # From MiniMax API dashboard
+MIMO_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx          # From MiMo (Xiaomi) API dashboard. Primary LLM provider.
 TWITTER_API_KEY=xxxxxxxxxxxxxxxxxx           # From twitterapi.io → Dashboard
 POLYMARKET_API_KEY=xxxxxxxxxxxxxxxx          # From Polymarket CLOB API docs
 POLYMARKET_SECRET=xxxxxxxxxxxxxxxx           # CLOB trading credential
@@ -462,7 +462,7 @@ Now dashboard is at `https://dashboard.yourdomain.com` with Cloudflare's securit
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| LLM | MiniMax (`MiniMax-M2.7`, configurable via `LLM_MODEL`) | Strong reasoning, no refusal on financial predictions |
+| LLM | MiMo / Xiaomi (`mimo-v2.5-pro`, configurable via `LLM_MODEL` + `LLM_BASE_URL`) | OpenAI-compatible, strong reasoning, low cost per call |
 | Social data | TwitterAPI.io ($0.15/1K tweets) | Full control over pre-filtering, cheaper than Grok X Search |
 | News data | RSS feeds (AP, Reuters, Bloomberg) | Free, real-time, headline-level sufficient as trigger (see 11.3) |
 | Strategy | Dual-tier (News Sniper + Crypto Opportunist) | Maximizes edge per dollar of OpEx |
@@ -651,7 +651,7 @@ Before calling the expensive Twitter API ($0.0075/market), a cheap LLM pre-scree
 | Min confidence | `PRESCREEN_MIN_CONFIDENCE` | `0.25` | Much lower than full eval (0.65+) — loose gate |
 | Max tokens | `PRESCREEN_MAX_TOKENS` | `500` | Keeps latency ~1s and cost ~$0.0001/call. VPS runs at 1500. |
 
-**Structured output (Round 5, 2026-04-20):** `call_prescreen()` sends `response_format={"type": "json_object"}` to MiniMax and validates the response with a `PrescreenResult` pydantic model (`estimated_probability ∈ [0,1]`, `confidence ∈ [0,1]` default 0.5, `reasoning`). A two-stage parse first tries `PrescreenResult.model_validate_json(raw)`, then falls back to the legacy `parse_json_safe()` + `PrescreenResult.model_validate()` path for responses still wrapped in `<think>…</think>` traces. Parse failures structlog `prescreen_parse_failed` with `errors` and `raw_preview` fields.
+**Structured output (Round 5, 2026-04-20):** `call_prescreen()` sends `response_format={"type": "json_object"}` to the LLM provider (MiMo as of 2026-06-05) and validates the response with a `PrescreenResult` pydantic model (`estimated_probability ∈ [0,1]`, `confidence ∈ [0,1]` default 0.5, `reasoning`). A two-stage parse first tries `PrescreenResult.model_validate_json(raw)`, then falls back to the legacy `parse_json_safe()` + `PrescreenResult.model_validate()` path for responses still wrapped in `<think>…</think>` traces. Parse failures structlog `prescreen_parse_failed` with `errors` and `raw_preview` fields.
 
 **Thresholds are intentionally loose.** False negatives (filtering a real edge) are acceptable at low cost. False positives (letting through noise) cost ~$0.0075 Twitter + $0.0004 LLM — the penalty is small. Start loose, tighten based on `SELECT skip_reason, COUNT(*) FROM trade_records WHERE skip_reason LIKE 'prescreen_%'` data.
 
@@ -1177,8 +1177,8 @@ Optional parallel test: for 20-30 markets, send identical context to both old an
 
 ```bash
 python -m src.manage model_swap \
-  --old-model "MiniMax-M2.7" \
-  --new-model "MiniMax-M3" \
+  --old-model "mimo-v2.5-pro" \
+  --new-model "mimo-v2.6-pro" \
   --reason "New model released, improvement validated"
 ```
 
