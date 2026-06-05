@@ -62,7 +62,7 @@ def _build_scheduler() -> Scheduler:
     settings.MARKET_COOLDOWN_HOURS = 24.0
     settings.EVALUATION_COOLDOWN_HOURS = 4.0
     settings.QUESTION_SIMILARITY_THRESHOLD = 0.60
-    settings.LLM_MODEL = "MiniMax-M2.7"
+    settings.LLM_MODEL = "mimo-v2.5-pro"
     settings.MARKET_FETCH_LIMIT = 200
     settings.MARKET_PAGE_SIZE = 500
     settings.MARKET_FETCH_PAGES = 3
@@ -794,7 +794,7 @@ def _make_stub_trade_record():
         record_id="stub-rec",
         experiment_run="exp-001",
         timestamp=datetime.now(timezone.utc),
-        model_used="MiniMax-M2.7",
+        model_used="mimo-v2.5-pro",
         market_id="mkt-stub",
         market_question="Will Y happen?",
         market_type="political",

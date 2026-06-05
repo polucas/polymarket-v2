@@ -50,8 +50,10 @@ def _make_xai_response(content: str, prompt_tokens: int = 100, completion_tokens
 
 def _mock_settings():
     s = MagicMock()
-    s.MINIMAX_API_KEY = "test-minimax-key"
-    s.LLM_MODEL = "MiniMax-M2.7"
+    s.MIMO_API_KEY = "test-mimo-key"
+    s.MINIMAX_API_KEY = ""
+    s.LLM_MODEL = "mimo-v2.5-pro"
+    s.LLM_BASE_URL = "https://api.xiaomimimo.com/v1"
     s.PRESCREEN_MAX_TOKENS = 500
     s.PRESCREEN_ANCHORING_MODE = "independent"
     return s
@@ -371,7 +373,7 @@ class TestCallGrokWithRetry:
             await grok.call_grok_with_retry("ctx", "market-4")
 
         db.increment_api_cost.assert_awaited_once_with(
-            "minimax", tokens_in=200, tokens_out=80,
+            "mimo", tokens_in=200, tokens_out=80,
         )
 
     @pytest.mark.asyncio

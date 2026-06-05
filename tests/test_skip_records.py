@@ -47,7 +47,7 @@ def _build_scheduler() -> Scheduler:
     settings.COOLDOWN_DURATION_HOURS = 2.0
     settings.DAILY_API_BUDGET_USD = 8.0
     settings.MAX_TOTAL_EXPOSURE_PCT = 0.30
-    settings.LLM_MODEL = "MiniMax-M2.7"
+    settings.LLM_MODEL = "mimo-v2.5-pro"
     settings.MARKET_COOLDOWN_HOURS = 24.0
     settings.QUESTION_SIMILARITY_THRESHOLD = 0.60
     settings.MARKET_FETCH_LIMIT = 200

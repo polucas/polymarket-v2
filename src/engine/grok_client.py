@@ -14,7 +14,6 @@ from src.db.sqlite import Database
 
 log = structlog.get_logger()
 
-MINIMAX_API_BASE = "https://api.minimaxi.chat/v1"
 MAX_RETRIES = 2
 REQUIRED_FIELDS = {"estimated_probability", "confidence", "reasoning"}
 
@@ -65,7 +64,7 @@ OUTPUT: Return ONLY valid JSON, no markdown or extra text."""
 def parse_json_safe(raw: str) -> Optional[dict]:
     """Parse JSON with multiple fallback strategies."""
     text = raw.strip()
-    # Strip <think>...</think> blocks (reasoning models like MiniMax-M2.7)
+    # Strip <think>...</think> blocks (reasoning models like MiMo)
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     # Direct parse
     try:
@@ -135,7 +134,8 @@ def _validate_llm_response(data: dict) -> Optional[dict]:
 
 class LLMClient:
     def __init__(self, settings: Settings, db: Database):
-        self._api_key = settings.MINIMAX_API_KEY
+        self._api_key = settings.MIMO_API_KEY or settings.MINIMAX_API_KEY
+        self._base_url = settings.LLM_BASE_URL
         self._db = db
         self._model = settings.LLM_MODEL
         self._settings = settings
@@ -148,7 +148,7 @@ class LLMClient:
         system_prompt: str = SYSTEM_PROMPT,
         response_format: Optional[dict] = None,
     ) -> str:
-        """Raw API call to MiniMax."""
+        """Raw API call to MiMo (OpenAI-compatible)."""
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -163,9 +163,10 @@ class LLMClient:
         if response_format is not None:
             payload["response_format"] = response_format
 
+        provider = "mimo" if "xiaomimimo" in self._base_url else "minimax"
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(
-                f"{MINIMAX_API_BASE}/chat/completions",
+                f"{self._base_url}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
@@ -178,14 +179,14 @@ class LLMClient:
             # Track API cost
             usage = data.get("usage", {})
             await self._db.increment_api_cost(
-                "minimax",
+                provider,
                 tokens_in=usage.get("prompt_tokens", 0),
                 tokens_out=usage.get("completion_tokens", 0),
             )
             return content
 
     async def call_grok_with_retry(self, context: str, market_id: str) -> Optional[dict]:
-        """Call MiniMax with retry pipeline. MAX_RETRIES=2 (total 3 attempts)."""
+        """Call LLM with retry pipeline. MAX_RETRIES=2 (total 3 attempts)."""
         for attempt in range(MAX_RETRIES + 1):
             try:
                 raw = await self.complete(context)

@@ -45,5 +45,5 @@ class TestSafeConfig:
 
     def test_secret_fields_is_frozen(self):
         assert isinstance(_SECRET_FIELDS, frozenset)
-        # 7 original fields + POLYMARKET_PRIVATE_KEY + POLYMARKET_FUNDER_ADDRESS (added Phase C)
-        assert len(_SECRET_FIELDS) == 9
+        # 7 original fields + POLYMARKET_PRIVATE_KEY + POLYMARKET_FUNDER_ADDRESS (Phase C) + MIMO_API_KEY (MiMo provider)
+        assert len(_SECRET_FIELDS) == 10

@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Automated prediction market trading bot targeting Polymarket. Detects news events, estimates probabilities via MiniMax LLM, compares to market prices, and trades when it finds an edge. Two tiers: Tier 1 (news-driven event markets, 15min-7d resolution) and Tier 2 (crypto, 15min resolution, trigger-based).
+Automated prediction market trading bot targeting Polymarket. Detects news events, estimates probabilities via MiMo LLM, compares to market prices, and trades when it finds an edge. Two tiers: Tier 1 (news-driven event markets, 15min-7d resolution) and Tier 2 (crypto, 15min resolution, trigger-based).
 
 **Design doc:** `polymarket_system_v2.md` (v2.10, 2500+ lines) — the single source of truth for all system behavior. Consult it for rationale behind any design decision.
 
@@ -21,9 +21,9 @@ pytest tests/test_config.py           # Single file
 pytest -k "calibration"               # By keyword
 
 # CLI management
-python -m src.manage model_swap --old-model "MiniMax-M2.7" --new-model "..." --reason "..."
+python -m src.manage model_swap --old-model "mimo-v2.5-pro" --new-model "..." --reason "..."
 python -m src.manage void_trade --trade-id "<uuid>" --reason "..."
-python -m src.manage start_experiment --description "..." --model "MiniMax-M2.7"
+python -m src.manage start_experiment --description "..." --model "mimo-v2.5-pro"
 python -m src.manage end_experiment --run-id "<uuid>"
 python -m src.manage recalculate_learning
 ```
@@ -48,7 +48,7 @@ src/
 │   ├── polymarket.py        # Gamma API (markets) + CLOB API (trading)
 │   └── context_builder.py   # Keyword extraction + LLM context formatting
 ├── engine/
-│   ├── grok_client.py       # MiniMax API wrapper (LLMClient), 3-attempt retry, call_prescreen() (1 retry, 300 tokens, fail-open), JSON parse fallback
+│   ├── grok_client.py       # MiMo/OpenAI-compatible API wrapper (LLMClient), 3-attempt retry, call_prescreen() (1 retry, 300 tokens, fail-open), JSON parse fallback
 │   ├── trade_decision.py    # Spread-aware edge calc, VWAP Kelly sizing, Monk Mode
 │   ├── trade_ranker.py      # Score = edge x confidence x time_value, cluster detection
 │   ├── execution.py         # Paper simulation (maker/taker) + live CLOB orders
@@ -86,11 +86,11 @@ docs/
 
 **Risk management (Monk Mode):** Daily loss -5%, weekly -10%, consecutive adverse cooldown (3+), max exposure 30%, API budget $15/day. All enforced in `src/engine/trade_decision.py`.
 
-**Duplicate bet prevention:** 24h cooldown after trading a market (`MARKET_COOLDOWN_HOURS`), plus Jaccard keyword-overlap similarity check at 60% threshold (`QUESTION_SIMILARITY_THRESHOLD`) to block near-duplicate questions. Additionally, a 4h evaluation cooldown (`EVALUATION_COOLDOWN_HOURS`) prevents re-calling MiniMax on the same market within 4 hours (silent skip, no DB record). Skip reasons: `market_cooldown`, `similar_to_{id}`.
+**Duplicate bet prevention:** 24h cooldown after trading a market (`MARKET_COOLDOWN_HOURS`), plus Jaccard keyword-overlap similarity check at 60% threshold (`QUESTION_SIMILARITY_THRESHOLD`) to block near-duplicate questions. Additionally, a 4h evaluation cooldown (`EVALUATION_COOLDOWN_HOURS`) prevents re-calling the LLM on the same market within 4 hours (silent skip, no DB record). Skip reasons: `market_cooldown`, `similar_to_{id}`.
 
-**Daily self-check (Autoresearch):** Runs 15 min after nightly summary. Gathers metrics (win rate, ROI, Brier by type, calibration drift, skip reasons), calls MiniMax for analysis, persists to `daily_reviews` table + `data/daily_reviews/*.md`, sends Telegram alert. Does NOT auto-implement changes.
+**Daily self-check (Autoresearch):** Runs 15 min after nightly summary. Gathers metrics (win rate, ROI, Brier by type, calibration drift, skip reasons), calls MiMo for analysis, persists to `daily_reviews` table + `data/daily_reviews/*.md`, sends Telegram alert. Does NOT auto-implement changes.
 
-**Orderbook re-fetch after LLM:** The orderbook is fetched once before MiniMax is called, then re-fetched after `call_grok_with_retry()` returns. This prevents adverse selection: if latency bots sweep the book during the ~2-4s LLM call, the edge recalculation uses fresh prices. If the book moved against the prediction, edge will be negative and the trade is skipped. See `scheduler.py:_process_market()`.
+**Orderbook re-fetch after LLM:** The orderbook is fetched once before the LLM is called, then re-fetched after `call_grok_with_retry()` returns. This prevents adverse selection: if latency bots sweep the book during the ~2-4s LLM call, the edge recalculation uses fresh prices. If the book moved against the prediction, edge will be negative and the trade is skipped. See `scheduler.py:_process_market()`.
 
 **Deterministic signal classification:** `info_type` (I1-I5) is assigned deterministically at signal creation time via `classify_info_type(source_tier)` in `src/pipelines/signal_classifier.py`. S1→I1, S2/S3→I2, S4→I3, S5→I4, S6→I5. This replaces the previous approach of asking the LLM to classify signal types (which introduced subjective variance and lacked timestamps). Signal tags now include real publication timestamps, making temporal confidence decay actually operational.
 
@@ -118,12 +118,12 @@ docs/
 
 ## Key Configuration
 
-- **Model:** `LLM_MODEL` env var, default `MiniMax-M2.7` (configurable in `.env`)
+- **Model:** `LLM_MODEL` env var, default `mimo-v2.5-pro` (configurable in `.env`); `LLM_BASE_URL` defaults to `https://api.xiaomimimo.com/v1`; set `MIMO_API_KEY` (falls back to `MINIMAX_API_KEY` for backward compat)
 - **Bankroll:** $10,000 (set in `config.py` INITIAL_BANKROLL). Max bet $160 via `MAX_POSITION_PCT=0.016` applied to live `portfolio.total_equity`.
 - **Tier 1:** 15-min scan interval, resolution 15min-7d, 20 trades/day cap, 0% fee, 3% min edge
 - **Tier 2:** 2-3 min scan (only during active news window), 15-min resolution, 3 trades/day cap
 - **Market fetch:** 10 pages × 100 markets sorted by volume (`MARKET_PAGE_SIZE=100`, `MARKET_FETCH_PAGES=10`) = up to 1,000 most active markets per scan. Note: Polymarket Gamma API silently caps `limit` at 100 per request — anything larger is truncated. Keep `MARKET_PAGE_SIZE` ≤ 100 and scale total fetch via `MARKET_FETCH_PAGES` (offset-based pagination). Code-level early-break at `polymarket.py:57` (`if len(page_markets) < page_size: break`) means an oversized `MARKET_PAGE_SIZE` will terminate the loop after page 1, fetching only 100 markets total.
-- **Pre-screen gate:** `PRESCREEN_ENABLED=true`, `PRESCREEN_MIN_EDGE=0.05`, `PRESCREEN_MIN_CONFIDENCE=0.25`, `PRESCREEN_MAX_TOKENS=1500` (VPS) / `500` (default) — cheap LLM check before Twitter fetch; filters ~25-40% of markets. Round 5 (2026-04-20): output validated by `PrescreenResult` pydantic schema; MiniMax called with `response_format={"type":"json_object"}` for structured output; two-stage parse falls back to `parse_json_safe()` for legacy `<think>`-wrapped responses.
+- **Pre-screen gate:** `PRESCREEN_ENABLED=true`, `PRESCREEN_MIN_EDGE=0.05`, `PRESCREEN_MIN_CONFIDENCE=0.25`, `PRESCREEN_MAX_TOKENS=1500` (VPS) / `500` (default) — cheap LLM check before Twitter fetch; filters ~25-40% of markets. Round 5 (2026-04-20): output validated by `PrescreenResult` pydantic schema; LLM called with `response_format={"type":"json_object"}` for structured output; two-stage parse falls back to `parse_json_safe()` for legacy `<think>`-wrapped responses.
 - **Price filter:** Skip markets outside 5%-95% YES range (`MIN_TRADEABLE_PRICE=0.05`, `MAX_TRADEABLE_PRICE=0.95`)
 - **API budget:** $15/day (`DAILY_API_BUDGET_USD=15.0`)
 - **Duplicate prevention:** 24h market cooldown, 4h evaluation cooldown, 60% question similarity threshold
@@ -158,12 +158,12 @@ docs/
 - **Paper mode relaxations:** Min position threshold is $0.50 in paper mode vs $1.00 in live. `TIER1_MIN_EDGE` defaults to 0.03 (can increase for live).
 - **Daily reviews:** Written to both DB (`daily_reviews` table) and `data/daily_reviews/YYYY-MM-DD.md`. Check `/reviews` endpoint or the markdown files for daily performance analysis.
 - **OrderBookLevel vs plain floats:** `OrderBook.bids` and `OrderBook.asks` are `List[OrderBookLevel]` (price + size), NOT plain floats. Bids are sorted descending by price, asks ascending, before slicing top 5 from the CLOB API. Tests using mock OrderBooks must use `OrderBookLevel` objects or mock the `spread`/`total_depth` properties.
-- **Evaluation cooldown:** Markets that received a MiniMax full evaluation (including low_edge SKIPs) are silently skipped for 4 hours (`EVALUATION_COOLDOWN_HOURS`). No DB record is written for these skips. This cooldown is checked BEFORE the pre-screen gate — if a market is on cooldown, it's skipped instantly (no LLM, no Twitter). Pre-screen filtered markets do NOT trigger evaluation cooldown (they never reached full LLM), so they will be re-evaluated next scan.
+- **Evaluation cooldown:** Markets that received a full LLM evaluation (including low_edge SKIPs) are silently skipped for 4 hours (`EVALUATION_COOLDOWN_HOURS`). No DB record is written for these skips. This cooldown is checked BEFORE the pre-screen gate — if a market is on cooldown, it's skipped instantly (no LLM, no Twitter). Pre-screen filtered markets do NOT trigger evaluation cooldown (they never reached full LLM), so they will be re-evaluated next scan.
 - **Early-exited trades get `trade_profitable` immediately:** They have PnL and `exit_type` set but `actual_outcome` is NULL initially. Phase 1 dual-label: `trade_profitable` (1 if pnl > 0 else 0) and `pnl_brier_raw/adjusted` are written at exit time. `actual_outcome` may still fill later when Polymarket resolves the market — the natural resolution scanner (`get_open_trades()`) no longer filters `AND exit_type IS NULL`, so early-exited trades remain eligible for ground-truth resolution.
 - **VWAP returns price, not 1.0:** `compute_vwap()` returns `total_usd / total_shares` — the volume-weighted average *price* per share, not a USD ratio. VWAP is used in `kelly_size_vwap()` to cap position size at the depth where the trade remains profitable.
 - **RSS accumulator lock:** `poll_and_accumulate()` uses an `asyncio.Lock` to prevent race conditions with `consume_signals()`. The lock is per-instance, not global.
 - **WebSocket exit manager:** `RealTimeExitManager` in `src/engine/ws_exit.py` subscribes to YES tokens of open positions on the Polymarket market channel (`wss://ws-subscriptions-clob.polymarket.com/ws/market`). It calculates ROI from the best bid (sell price) and triggers instant TP/SL exits. The 5-min polling fallback in `check_early_exits()` catches anything missed during WS disconnects. Positions are tracked by `clob_token_id_yes` (stored in TradeRecord since migration v6).
 - **Pagination settings for mocked tests:** Tests that mock `Settings` with `spec=Settings` must set `MARKET_PAGE_SIZE`, `MARKET_FETCH_PAGES`, `MIN_TRADEABLE_PRICE`, and `MAX_TRADEABLE_PRICE` in addition to `MARKET_FETCH_LIMIT` for any test calling `get_active_markets()`.
 - **signal_tags format:** `signal_tags` passed to `adjust_prediction()` are now built from signal objects (not from the LLM's response). Format: `[{"source_tier": "SX", "info_type": "IX", "timestamp": "ISO8601|None"}]`. `info_type` is assigned by `classify_info_type(source_tier)` at creation. Timestamps from RSS/Twitter publication time enable temporal decay in Step 5.
-- **LLM response no longer includes signal_info_types:** `REQUIRED_FIELDS` in `grok_client.py` is `{"estimated_probability", "confidence", "reasoning"}`. MiniMax is not asked to classify signals — this is done deterministically via `classify_info_type(source_tier)` at signal creation. This change (v2.10) enables temporal decay: signal objects now carry real publication timestamps, replacing Grok-assigned types that had no timestamps (decay was dead code before). Tests that build LLM response dicts should NOT include `signal_info_types`.
+- **LLM response no longer includes signal_info_types:** `REQUIRED_FIELDS` in `grok_client.py` is `{"estimated_probability", "confidence", "reasoning"}`. The LLM is not asked to classify signals — this is done deterministically via `classify_info_type(source_tier)` at signal creation. This change (v2.10) enables temporal decay: signal objects now carry real publication timestamps, replacing Grok-assigned types that had no timestamps (decay was dead code before). Tests that build LLM response dicts should NOT include `signal_info_types`.
 - **April 6, 2026 Polymarket exchange upgrade**: Polymarket rebuilt its order matching engine, migrated to native Polymarket USD stablecoin (from bridged USDC.e), and added smart contract wallet support (ERC-1271). Live trading now requires: (a) `POLYMARKET_PRIVATE_KEY` (wallet private key for signing, 0x-prefixed) and `POLYMARKET_FUNDER_ADDRESS` (for proxy/smart wallets; leave blank for EOA) set in `.env`; (b) `POLYMARKET_SECRET` and `POLYMARKET_PASSPHRASE` are now used as `ApiCreds` in the `ClobClient` Level-2 init (they were dead code before); (c) `py-clob-client` is pinned to `~=0.34.0` in `requirements.txt`; (d) `place_order()` now accepts `clob_token_id` (the ERC-1155 token ID from `Market.clob_token_id_yes`/`_no`) instead of `market_id`, and side is always `"BUY"` — direction is encoded by which token you target; (e) run `scripts/live_smoke_test.py` on VPS to validate before flipping `ENVIRONMENT=live`. Paper mode is unaffected.

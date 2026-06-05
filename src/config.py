@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SECRET_FIELDS = frozenset({
-    "XAI_API_KEY", "MINIMAX_API_KEY", "TWITTER_API_KEY", "POLYMARKET_API_KEY",
+    "XAI_API_KEY", "MINIMAX_API_KEY", "MIMO_API_KEY", "TWITTER_API_KEY", "POLYMARKET_API_KEY",
     "POLYMARKET_SECRET", "POLYMARKET_PASSPHRASE", "TELEGRAM_BOT_TOKEN",
     "POLYMARKET_PRIVATE_KEY", "POLYMARKET_FUNDER_ADDRESS",
 })
@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     # API Keys
     XAI_API_KEY: str = ""
     MINIMAX_API_KEY: str = ""
+    MIMO_API_KEY: str = ""
     TWITTER_API_KEY: str = ""
     POLYMARKET_API_KEY: str = ""
     POLYMARKET_SECRET: str = ""      # L2 ApiCreds api_secret — used by ClobClient for CLOB authentication
@@ -25,7 +26,8 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "paper"  # "paper" or "live"
     DB_PATH: str = "data/predictor.db"
     LOG_LEVEL: str = "INFO"
-    LLM_MODEL: str = "MiniMax-M2.7"
+    LLM_MODEL: str = "mimo-v2.5-pro"
+    LLM_BASE_URL: str = "https://api.xiaomimimo.com/v1"
 
     # RSS Polling
     RSS_POLL_INTERVAL_SECONDS: int = 30
