@@ -62,6 +62,13 @@ async def main() -> None:
         default=20,
         help="Number of worst per-trade diffs to display (default: 20).",
     )
+    p.add_argument(
+        "--apply",
+        action="store_true",
+        help="MUTATE the DB: update trade_records.pnl for affected trades and "
+             "adjust portfolio cash_balance/total_pnl/total_equity by total_drift. "
+             "Atomic transaction. Idempotent.",
+    )
     args = p.parse_args()
 
     settings = get_settings()
@@ -82,9 +89,8 @@ async def main() -> None:
     ) as cursor:
         rows = await cursor.fetchall()
 
-    await db.close()
-
     if not rows:
+        await db.close()
         print("No natural-resolution closed trades found.")
         return
 
@@ -130,6 +136,49 @@ async def main() -> None:
     drift_pct = (total_drift / stored_winner_sum * 100) if stored_winner_sum else 0.0
 
     # ------------------------------------------------------------------ #
+    # Apply mutation (only if --apply)                                     #
+    # ------------------------------------------------------------------ #
+    if args.apply:
+        if abs(total_drift) < 1e-6:
+            print()
+            print("--apply: total_drift is ~$0.00 — DB already reconciled. No-op.")
+            await db.close()
+            return
+
+        # Trades whose pnl needs updating (any nonzero diff)
+        to_update = [r for r in results if abs(r["diff"]) >= 1e-9]
+
+        try:
+            await db._conn.execute("BEGIN IMMEDIATE")
+            for r in to_update:
+                await db._conn.execute(
+                    "UPDATE trade_records SET pnl = ? WHERE record_id = ?",
+                    (r["correct_pnl"], r["record_id"]),
+                )
+            # Portfolio adjustment (id=1 by convention)
+            await db._conn.execute(
+                """UPDATE portfolio
+                   SET cash_balance = cash_balance + ?,
+                       total_pnl    = total_pnl + ?,
+                       total_equity = total_equity + ?,
+                       peak_equity  = MAX(peak_equity, total_equity + ?),
+                       updated_at   = datetime('now')
+                   WHERE id = 1""",
+                (total_drift, total_drift, total_drift, total_drift),
+            )
+            await db._conn.commit()
+        except Exception:
+            await db._conn.rollback()
+            await db.close()
+            raise
+
+        print()
+        print(f"APPLIED: {len(to_update)} trade pnls updated; "
+              f"portfolio cash_balance/total_pnl/total_equity += ${total_drift:+.2f}")
+        await db.close()
+        return
+
+    # ------------------------------------------------------------------ #
     # Table 1 — per-trade diffs (top N by abs diff)                       #
     # ------------------------------------------------------------------ #
     # Only winners can have a positive drift; include losers in case
@@ -171,6 +220,8 @@ async def main() -> None:
     print(f"TOTAL DRIFT ATTRIBUTABLE TO FORMULA BUG:        ${total_drift:>+10.2f}  (correct - stored)")
     print()
     print(f"% drift vs total stored winning pnl:            {drift_pct:+.1f}%")
+
+    await db.close()
 
 
 if __name__ == "__main__":
