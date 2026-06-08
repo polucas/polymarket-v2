@@ -1,355 +1,265 @@
 # Next Steps — Polymarket v2
 
-_Last updated: 2026-05-20 — Phase A acceleration active. DB reset clean. Bug 5/6 round shipped. Pagination fix shipped (10x market volume). Live launch (Phase C) blocked only on L2 API creds + funding._
+_Last updated: 2026-06-08 — Fresh DB after drift root-cause + atomic save fix. Drift monitoring Layers 1+2 shipped. SL/TP soak restarts from n=0._
 
 ## Current state
 
 - **Mode:** paper, `ENVIRONMENT=paper`
-- **DB:** fresh as of 2026-05-19 (full wipe, schema v7, $10K bankroll)
-- **Phase A loosened gates active (2026-05-20):**
-  - `DISABLED_MARKET_TYPES=sports,esports` (economic re-enabled after Bug 5/6 round; esports added 2026-05-20 as conceptually equivalent to sports)
-  - `PRESCREEN_MIN_EDGE=0.025` (was 0.05)
-  - `PRESCREEN_MIN_CONFIDENCE=0.25` (was 0.30)
-  - `MIN_HOURS_TO_RESOLUTION=0.25` (was 0.5)
-  - `TWITTER_ENABLED=false` (cold start, will A/B in dev env later)
-  - `FAST_EXIT_POLL_INTERVAL_SECONDS=60`, `WS_HEARTBEAT_SECONDS=10` (Bug 6 fixes)
-- **Pagination fix (2026-05-20):** `MARKET_PAGE_SIZE=100`, `MARKET_FETCH_PAGES=10` — Polymarket Gamma API silently caps `limit` at 100/page, so previous defaults (500/2) were fetching 100 markets/scan instead of 1000. After fix: ~1000 markets/scan = 10x candidate pool.
-- **Service:** `active + enabled`, paper
-
-## Monitoring summary
-
-| Window | Signal | Action |
-|---|---|---|
-| Daily | `/morning-check` | Use named env-only lever per alarm row |
-| Daily | `cash_balance` vs computed | DRIFT > $50 → halt + investigate (Bug 5 territory) |
-| Daily | Label coverage (`pnl_labeled == total_non_skip`) | Mismatch → exit-path label regression |
-| Phase A 5-day cumulative | `executed_trades`, sum_pnl, Brier raw | <20 trades → loosen more; bad PnL → fix before live |
+- **DB:** fresh as of 2026-06-08 06:54 UTC (full wipe, schema v9, $10K bankroll)
+- **Old session archive:** `data/predictor.db.session-end-1780901680` (29 MB, $792 drift)
+- **Service:** active, fresh start, cash_drift_ok = 0.0 at boot
+- **LLM provider:** MiMo / Xiaomi (`mimo-v2.5-pro`, base `https://api.xiaomimimo.com/v1`)
+- **Active flags (`.env`):**
+  - `STOP_LOSS_ENABLED=false` (SL A/B experiment — soak from n=0)
+  - `TAKE_PROFIT_ENABLED=false` (TP A/B experiment — soak from n=0)
+  - `TIER1_DAILY_CAP=50`
+  - `PRESCREEN_MIN_EDGE=0.025`, `PRESCREEN_MIN_CONFIDENCE=0.30`
+  - `MIN_HOURS_TO_RESOLUTION=0.25`, `MIN_MARKET_VOLUME_24H=20000.0`
+  - `TWITTER_ENABLED=false`
+  - `MARKET_FETCH_PAGES=10` (10× pagination fix held)
+- **RSS:** 44 feeds, ~30 working from VPS (14 Cloudflare-blocked, see [project_vps_rss_ipblock](../.claude/projects/-home-jedicelli-polymarket-v2/memory/project_vps_rss_ipblock.md))
+- **Drift monitoring:** startup check + 30min periodic gauge → `drift_history` table + structured `cash_mutation` log per trade
+- **Atomic save:** `save_trade_with_portfolio` wraps entry cash deduction + trade record write in `BEGIN IMMEDIATE`/`COMMIT` (commit `7a45032`)
 
 ---
 
-## Phase A: paper acceleration (in flight, 2026-05-20 → 2026-05-25)
+## Priority 1 — Drift observation (active, automatic)
 
-**Goal:** 20+ executed trades, real Brier signal, validate Bug 5/6 fixes under load.
+Confirm Layers 1+2 monitoring stack works end-to-end. No action needed unless drift detected.
 
-### Watch list
+### What's already shipped (commit `1a72d05`)
+
+- **Schema v9** — `drift_history` table (timestamp, actual_cash, expected_cash, drift, n_entries, n_exits, locked_replay)
+- **APScheduler job** "Cash drift periodic check" runs every 30min → logs + persists row
+- **Per-trade audit log** — `cash_mutation` (operation: ENTRY/EXIT) on every cash write with cash_before / cash_after / delta / trade_id
+- **Startup check** in `src/main.py` lifespan — runs `check_cash_drift` after `init_portfolio_if_missing`
+
+### Observation checklist
 
 ```bash
-# Daily morning
-/morning-check
+# 1. First periodic row landed (30min after boot)
+ssh root@49.13.159.52 'cd /root/polymarket-v2 && sqlite3 data/predictor.db "SELECT COUNT(*), MIN(timestamp), MAX(timestamp), ROUND(MAX(ABS(drift)),2) FROM drift_history;"'
 
-# Quick volume check
-ssh root@49.13.159.52 "cd /root/polymarket-v2 && sqlite3 data/predictor.db \"SELECT action, COUNT(*) FROM trade_records WHERE timestamp > datetime('now','-24 hours') GROUP BY action;\""
+# 2. Drift trajectory
+ssh root@49.13.159.52 'cd /root/polymarket-v2 && sqlite3 data/predictor.db "SELECT timestamp, ROUND(drift,2), n_entries, n_exits FROM drift_history ORDER BY id DESC LIMIT 20;"'
 
-# WS health
-ssh root@49.13.159.52 "grep -c ws_exit_connected /root/polymarket-v2/data/bot.log"
+# 3. Find growth windows
+ssh root@49.13.159.52 'cd /root/polymarket-v2 && sqlite3 data/predictor.db "SELECT timestamp, ROUND(drift,2), ROUND(drift - LAG(drift) OVER (ORDER BY timestamp), 4) AS d_drift FROM drift_history ORDER BY timestamp DESC LIMIT 20;"'
+
+# 4. Per-trade audit
+ssh root@49.13.159.52 'grep cash_mutation /root/polymarket-v2/data/bot.log | tail -10'
+
+# 5. Growth events alarmed
+ssh root@49.13.159.52 'grep cash_drift_growth_event /root/polymarket-v2/data/bot.log | tail -5'
 ```
 
-### Phase A exit criteria (Day 5, 2026-05-25)
+### Alarm thresholds (built into `drift_monitor.check_cash_drift_periodic`)
+
+| `|drift|` | Log level | Event name |
+|---|---|---|
+| `< 5.0` | info | `cash_drift_ok` |
+| `5.0 - 49.99` | warning | `cash_drift_growing` |
+| `>= 50.0` | error | `cash_drift_alarm` |
+| `Δdrift > 1.0` between checks | warning | `cash_drift_growth_event` |
+
+### If drift fires
+
+1. Find first non-zero drift row in `drift_history` → timestamp T
+2. Grep `cash_mutation` events in `bot.log` around T ± 5 min
+3. Sum logged deltas; compare to actual `cash_balance` change between two `drift_history` rows
+4. Orphan delta = culprit trade. Missing trade row = interrupt → grep `CancelledError` in same window
+5. → escalate to **Priority 3** (build Layers 3-5)
+
+---
+
+## Priority 2 — no_signal audit + RSS feed expansion
+
+Bot was wiped 2026-06-08; new no_signal volume needs to accumulate before audit is meaningful. **Target: run after 48-72h of fresh trading** (~500+ SKIP rows in `trade_records`).
+
+### Run the existing skill
+
+```bash
+# Defaults: N=30 sampled markets, K=24h window, exclude sports/esports
+/no-signal-rss-audit
+
+# Or custom: more samples + longer window
+/no-signal-rss-audit 50 72 sports,esports,crypto_15m
+```
+
+Skill ([.claude/skills/no-signal-rss-audit.md](../.claude/skills/no-signal-rss-audit.md)) pulls `no_signals` skip samples, runs a live RSS poll on VPS, checks per-market keyword overlap, clusters uncovered patterns, and recommends candidate feeds. Diagnostic-only — never modifies `rss_feeds.yaml`.
+
+### Decision branch
+
+| Skill verdict | Action |
+|---|---|
+| >70% of no_signals markets uncovered AND coverable | Add HIGH/MOSTLY-factuality feeds from skill recommendations. Update `config/rss_feeds.yaml` + `config/known_sources.yaml`. Restart bot. |
+| >70% uncovered AND structurally unservable (e.g. local elections, tweet-count meta-markets) | Tighten upstream filter — bump `MIN_MARKET_VOLUME_24H` or extend `DISABLED_MARKET_TYPES`. |
+| <30% uncovered | Skip. Bot is not signal-bound. |
+
+### Constraints
+
+- **VPS IP-block**: 14 feeds already blocked by Cloudflare ([project_vps_rss_ipblock](../.claude/projects/-home-jedicelli-polymarket-v2/memory/project_vps_rss_ipblock.md)). Recommend new feeds from publishers known to allow DC IPs (gov sites, EU institutions, smaller outlets).
+- **Factuality bar**: HIGH or MOSTLY only per MBFC / AllSides / NewsGuard. CENTER bias preferred.
+- **Signal cap**: full-eval 10, prescreen 5 ([context_builder.py:104,172](../src/pipelines/context_builder.py)) — no need to raise; gap is sources, not capacity.
+- **Volume budget**: ~45 feeds OK. Beyond 60 risks 30s poll cycle overflow.
+
+### Verification post-deploy
+
+```bash
+# Skip-reason distribution
+ssh root@49.13.159.52 "cd /root/polymarket-v2 && sqlite3 data/predictor.db \"SELECT skip_reason, COUNT(*) FROM trade_records WHERE action='SKIP' AND timestamp > datetime('now','-24 hours') GROUP BY skip_reason ORDER BY 2 DESC LIMIT 10;\""
+
+# Expected: no_signals proportion drops by 10-30pp
+```
+
+---
+
+## Priority 3 — SL / TP soak experiments (restart from n=0)
+
+Both flags off → ALL closures via natural resolution. Snapshots accumulate in `trade_price_snapshots`. Soak target: **n ≥ 20 held-to-resolution trades** per [feedback_statistical_significance](../.claude/projects/-home-jedicelli-polymarket-v2/memory/feedback_statistical_significance.md).
+
+### Daily monitoring (`/morning-check`)
+
+- Watch `cash_drift_ok` line in startup logs (drift=0 expected)
+- Watch trade volume, exec rate, daily PnL
+- Watch new `cash_drift_growth_event` warnings
+
+### Decision points
 
 | Metric | Pass | Tune | Block |
 |---|---|---|---|
-| Executed trades | ≥20 | 5-19 | 0-4 |
-| Brier raw | <0.20 | 0.20-0.25 | >0.25 |
-| Cash drift | $0 | <$10 | >$50 |
-| WS slippage (exits at 0.01) | 0% | <10% | >20% |
+| Held-to-resolution count | ≥20 | 10-19 (wait) | bot not trading |
+| Cash drift | `$0` | `<$10` | `>$50` |
+| Daily realized PnL | net positive | even | net negative |
 
-- **Pass:** proceed to Phase B/C
-- **Tune:** further loosen (`PRESCREEN_MIN_EDGE` 0.025 → 0.015) or wait 3 more days
-- **Block:** identify specific bug, fix, restart Phase A
+When n ≥ 20:
+
+```bash
+ssh root@49.13.159.52 'cd /root/polymarket-v2 && venv/bin/python3 scripts/sl_analysis.py --since 2026-06-08'
+ssh root@49.13.159.52 'cd /root/polymarket-v2 && venv/bin/python3 scripts/tp_analysis.py --since 2026-06-08'
+```
+
+Decide: re-enable SL/TP at the best threshold OR keep disabled.
 
 ---
 
-## Phase B: decision gate (2026-05-25)
+## Priority 4 — Layers 3-5 (build when drift recurs)
 
-Pull metrics. Decide between:
+Deferred — implement only if drift > $10 detected via Priority 1 alarms. Plan in [/home/jedicelli/.claude/plans/lets-restart-our-work-enchanted-curry.md](../.claude/plans/lets-restart-our-work-enchanted-curry.md) covers Layers 1+2; extend for these.
 
-1. **Go live** → Phase C
-2. **Iterate paper** → tune one parameter, +3 days
-3. **Bug found** → fix + restart Phase A
+### Layer 3 — `CancelledError` trap with stage marker
+
+Wrap `execute_trade` body with explicit `try/except asyncio.CancelledError` that logs which stage was interrupted (pre-atomic-save, post-atomic-save). Today's atomic transaction makes this rare, but the marker would prove it.
+
+### Layer 4 — Daily drift summary in `daily_reviews`
+
+Append fields to `daily_reviews`: `drift_today`, `drift_total_lifetime`, `drift_delta_24h`. Surface in `/reviews/{date}` endpoint. Add Telegram alert when re-enabled.
+
+### Layer 5 — `/diagnose-drift` skill
+
+New `.claude/skills/diagnose-drift.md`. Reads first growth-event in `drift_history`, greps log around that timestamp, outputs ranked list of suspect events (`CancelledError`, mid-write exceptions, mismatched `cash_mutation` deltas vs actual cash change).
 
 ---
 
-## Phase C: live launch ($500 starting bankroll, 2026-05-25+)
+## Priority 5 — Phase C live launch (deferred)
 
-**Risk-scaled launch.** $500 = 1/20th of paper bankroll. Real-money signal at low blast radius.
+Pre-flight checklist + risk-scaled launch unchanged from prior plan. **Blocked on:**
 
-### Pre-flight checklist (do these IN PARALLEL with Phase A soak)
+1. Drift monitoring stable for 7+ days at $0
+2. SL/TP soak completes (n ≥ 20 per axis) and config decided
+3. Polymarket L2 API creds + funding
 
-#### C1. Fix `POLYMARKET_FUNDER_ADDRESS`
-
-Current value is len=125, should be 42 (`0x` + 40 hex) or empty for EOA.
-
-```bash
-ssh root@49.13.159.52 "grep '^POLYMARKET_FUNDER_ADDRESS=' /root/polymarket-v2/.env"
-# Inspect output. If wrong format, fix:
-ssh root@49.13.159.52 "sed -i 's|^POLYMARKET_FUNDER_ADDRESS=.*|POLYMARKET_FUNDER_ADDRESS=0xYOUR_PROXY_OR_EMPTY|' /root/polymarket-v2/.env"
-```
-
-#### C2. Generate L2 API creds (interactive)
-
-Three vars currently empty: `POLYMARKET_API_KEY`, `POLYMARKET_SECRET`, `POLYMARKET_PASSPHRASE`. Required for `ClobClient` Level-2 auth.
-
-**Option A — Polymarket web UI** (recommended):
-1. Visit polymarket.com → connect wallet → API keys section → Create new
-2. Copy `key`, `secret`, `passphrase`
-3. Append to `.env`:
+### C1-C7 steps (unchanged, archive of original Phase C plan)
 
 ```bash
-ssh root@49.13.159.52 "cat >> /root/polymarket-v2/.env <<'EOF'
+# C1. Verify POLYMARKET_FUNDER_ADDRESS (42 chars or empty)
+ssh root@49.13.159.52 "grep '^POLYMARKET_FUNDER_ADDRESS=' /root/polymarket-v2/.env | awk -F= '{print length(\$2)}'"
 
-# L2 API credentials (2026-05-25)
-POLYMARKET_API_KEY=<api_key>
-POLYMARKET_SECRET=<secret>
-POLYMARKET_PASSPHRASE=<passphrase>
-EOF"
+# C2. Generate L2 API creds via polymarket.com web UI OR ClobClient.create_api_key()
+# C3. Fund Polymarket wallet ($500 USDC.e on Polygon)
+# C4. CLOB allowance: ssh root@49.13.159.52 "cd /root/polymarket-v2 && venv/bin/python3 scripts/setup_clob_allowance.py"
+# C5. Smoke test: ssh root@49.13.159.52 "cd /root/polymarket-v2 && ENVIRONMENT=live venv/bin/python3 scripts/live_smoke_test.py"
+# C6. Flip prod to live: sed ENVIRONMENT, INITIAL_BANKROLL=500, MAX_POSITION_PCT=0.02
+# C7. First 24h watch
 ```
 
-**Option B — Bootstrap via ClobClient.create_api_key()** (if UI unavailable):
-```python
-# One-off Python REPL on VPS with L1 key set:
-from py_clob_client.client import ClobClient
-c = ClobClient(host="https://clob.polymarket.com", chain_id=137, key=os.environ["POLYMARKET_PRIVATE_KEY"])
-creds = c.create_or_derive_api_key()
-print(creds.api_key, creds.api_secret, creds.api_passphrase)
-# Copy outputs to .env
-```
-
-#### C3. Fund Polymarket wallet
-
-1. Get wallet address:
-```bash
-ssh root@49.13.159.52 "cd /root/polymarket-v2 && venv/bin/python3 -c \"
-from py_clob_client.client import ClobClient
-import os
-from dotenv import load_dotenv; load_dotenv('/root/polymarket-v2/.env')
-c = ClobClient(host='https://clob.polymarket.com', chain_id=137, key=os.environ['POLYMARKET_PRIVATE_KEY'])
-print('wallet:', c.get_address())
-\""
-```
-2. Send **USDC.e on Polygon** to that address. Amount: $500 (live launch) + ~$5 in MATIC for gas if EOA.
-3. Wait for confirmations.
-
-#### C4. Run CLOB allowance setup
-
-One-time approval for CLOB contract to spend USDC.
-
-```bash
-ssh root@49.13.159.52 "cd /root/polymarket-v2 && venv/bin/python3 scripts/setup_clob_allowance.py"
-```
-
-Expect output:
-- `Wallet address: 0x...`
-- `USDC contract:  0x...`
-- `Response: <tx hash>`
-- `Balance: 500.0` (or whatever was funded)
-
-If balance shows 0 → funding didn't arrive yet, retry after 1 min.
-
-#### C5. Run live smoke test
-
-Places a $0.01 limit order far from market price (won't fill). Validates signing + API flow.
-
-```bash
-ssh root@49.13.159.52 "cd /root/polymarket-v2 && ENVIRONMENT=live venv/bin/python3 scripts/live_smoke_test.py"
-```
-
-Expect: `OK — smoke test passed.` + order ID printed.
-
-**Manually cancel that test order on polymarket.com.** Currently no auto-cancel in the script.
-
-#### C6. Flip prod to live
-
-Switch service to live mode + reduce bankroll for risk-scaled launch.
-
-```bash
-ssh root@49.13.159.52 "systemctl stop polymarket && \
-  sed -i 's/^ENVIRONMENT=.*/ENVIRONMENT=live/' /root/polymarket-v2/.env && \
-  sed -i 's/^INITIAL_BANKROLL=.*/INITIAL_BANKROLL=500.0/' /root/polymarket-v2/.env && \
-  cat >> /root/polymarket-v2/.env <<'EOF'
-
-# Phase C launch overrides (2026-05-25)
-MAX_POSITION_PCT=0.02
-DAILY_LOSS_LIMIT_PCT=0.10
-WEEKLY_LOSS_LIMIT_PCT=0.20
-EOF
-  systemctl start polymarket && sleep 8 && curl -s http://localhost:8000/health | python3 -m json.tool"
-```
-
-Confirms:
-- `mode: live`
-- `open_trades: 0`
-- `uptime_hours > 0`
-
-#### C7. First 24h watch
-
-```bash
-# Every 4h
-ssh root@49.13.159.52 "curl -s http://localhost:8000/health"
-
-# Real wallet balance check
-ssh root@49.13.159.52 "cd /root/polymarket-v2 && venv/bin/python3 -c \"
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import ApiCreds, BalanceAllowanceParams, AssetType
-import os; from dotenv import load_dotenv; load_dotenv('/root/polymarket-v2/.env')
-c = ClobClient(host='https://clob.polymarket.com', chain_id=137,
-  key=os.environ['POLYMARKET_PRIVATE_KEY'],
-  creds=ApiCreds(api_key=os.environ['POLYMARKET_API_KEY'],
-                 api_secret=os.environ['POLYMARKET_SECRET'],
-                 api_passphrase=os.environ['POLYMARKET_PASSPHRASE']))
-print(c.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)))
-\""
-```
-
-**Kill switch:** if anything looks wrong (drift, error spam, unexpected positions), immediately:
-```bash
-ssh root@49.13.159.52 "systemctl stop polymarket && systemctl disable polymarket"
-```
-
-### Phase C exit criteria (after 50+ live trades or 14 days, whichever first)
+### Phase C exit criteria (post-live, 50+ trades or 14d)
 
 | Metric | Pass | Tune | Block |
 |---|---|---|---|
 | Realized PnL | >0% | -3% to 0% | <-3% |
 | Brier raw | <0.20 | 0.20-0.25 | >0.25 |
-| Cash drift on-chain vs reported | 0% | <1% | >1% |
-| Catastrophic SL fires (exit ~0.01) | 0% | <5% | >5% |
-
-**Pass → Phase D scale-up.**
+| Cash drift vs on-chain | 0% | <1% | >1% |
+| Catastrophic SL fires | 0% | <5% | >5% |
 
 ---
 
-## Phase D: scale-up (Day 21+ live, ~2026-06-15)
+## Priority 6 — Future improvements (post-Phase C)
 
-- $500 → $2,000 (4x bankroll bump)
-- Re-evaluate twitter via dev env (see below)
-- Then $2K → $10K once 100+ live trades validated positive
+### Twitter A/B (dev env)
+
+`TWITTER_ENABLED=false` in prod. Hypothesis from prior session: net-negative on paper. Re-test via parallel dev env (`polymarket-dev.service` on port 8003, separate DB at `data-dev/`). Plan archived below.
+
+### RSS — VPS IP block
+
+14 feeds 403 from VPS (ESPN ×6, ap_top, dotesports, euractiv, euronews, europarl, polygon, sec_press, politico). Solutions require proxy or cloudscraper — out of scope. See [project_vps_rss_ipblock](../.claude/projects/-home-jedicelli-polymarket-v2/memory/project_vps_rss_ipblock.md). 30 working feeds = 263 signals/poll baseline.
+
+### Cost levers (defer)
+
+- Cheaper pre-screen model. MiMo may offer tiered models; investigate when budget binds.
+
+### Ensemble LLM on high-stakes (defer)
+
+Post-Phase-D when n≥50 per market type.
+
+### `MIMO_API_KEY` cost calibration
+
+`api_costs.cost_usd` shows $0 for `mimo` service rows — pricing constants not updated for xiaomimimo. Low priority; affects DAILY_API_BUDGET_USD gate. Update when budget enforcement matters.
 
 ---
 
-## Parallel dev env on same VPS
+## Parallel dev env (deferred until live)
 
-**Goal:** test Twitter A/B, prompt changes, new gates without risking prod.
-
-### Architecture
+Same architecture as before:
 
 | Slot | Service | Port | DB | .env |
 |---|---|---|---|---|
 | Prod (live) | `polymarket.service` | 8000 | `data/predictor.db` | `/root/polymarket-v2/.env` |
 | Dev (paper) | `polymarket-dev.service` | 8003 | `data-dev/predictor.db` | `/root/polymarket-v2/.env.dev` |
-| Datasette | `datasette.service` | 8001 | mounts both | (default config) |
 
-### Setup steps
-
-```bash
-# 1. Create dev workspace
-ssh root@49.13.159.52 "mkdir -p /root/polymarket-dev && \
-  cp -r /root/polymarket-v2/{src,scripts,config,tests,requirements.txt,metadata.json} /root/polymarket-dev/ && \
-  cp -r /root/polymarket-v2/venv /root/polymarket-dev/venv && \
-  mkdir /root/polymarket-dev/data"
-
-# 2. Build dev .env (paper, separate API budget, twitter on)
-ssh root@49.13.159.52 "cp /root/polymarket-v2/.env /root/polymarket-dev/.env && \
-  sed -i 's/^ENVIRONMENT=.*/ENVIRONMENT=paper/' /root/polymarket-dev/.env && \
-  sed -i 's/^TWITTER_ENABLED=.*/TWITTER_ENABLED=true/' /root/polymarket-dev/.env && \
-  sed -i 's/^DAILY_API_BUDGET_USD=.*/DAILY_API_BUDGET_USD=5.0/' /root/polymarket-dev/.env && \
-  cat >> /root/polymarket-dev/.env <<'EOF'
-
-# Dev env override (paper sandbox)
-DB_PATH=/root/polymarket-dev/data/predictor.db
-HTTP_PORT=8003
-EOF"
-```
-
-(Code change: `src/config.py` needs `DB_PATH` setting + `HTTP_PORT` reading. Confirm what exists today — may need a small PR to make port configurable. If not, run dev on port 8000 with prod off, only useful for one-off tests not parallel.)
-
-```bash
-# 3. Build dev systemd unit
-ssh root@49.13.159.52 "cat > /etc/systemd/system/polymarket-dev.service <<'EOF'
-[Unit]
-Description=Polymarket Predictor — DEV sandbox
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/polymarket-dev
-EnvironmentFile=/root/polymarket-dev/.env
-ExecStart=/root/polymarket-dev/venv/bin/python -m src.main
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload"
-```
-
-### Risks + mitigations on shared VPS
-
-| Risk | Mitigation |
-|---|---|
-| Shared MiniMax API quota | Lower `DAILY_API_BUDGET_USD=5` on dev (was 15) |
-| Shared Twitter API (if re-funded) | Use a different `TWITTER_API_KEY` on dev only |
-| CPU/RAM contention | Polymarket-v2 is async, low resource. 1GB free is fine for both. Monitor `htop`. |
-| Dev crash takes down prod | None — separate systemd units, independent processes |
-| Datasette serves wrong DB | Mount both: `--load-extension prod:data/predictor.db --load-extension dev:data-dev/predictor.db` |
-
-### Workflow
-
-1. Code change → push to `main`
-2. Test in dev: `systemctl restart polymarket-dev`
-3. Monitor `/health` at port 8003 + datasette
-4. If clean after N days → enable on prod (`systemctl restart polymarket`)
+Needs `HTTP_PORT` env reading (small PR). Build after Phase C.
 
 ---
 
-## Closed items (archived)
+## Closed items (this session, 2026-05-19 → 2026-06-08)
 
 | Round | Date | Items |
 |---|---|---|
-| §1j Phase 1 (dual-label) | 2026-04-28 | DONE |
-| Bug 5 + 6 round | 2026-05-19 | DONE: `auto_resolve` early-exit guard, fast_exit_check, MIN_HOURS_TO_RESOLUTION, WS heartbeat, sports/economic env-disable, twitter env-disable |
-| DB reset to clean state | 2026-05-19 | DONE: fresh schema v7, $10K bankroll, 0 trades |
-| Phase A acceleration | 2026-05-20 | ACTIVE — running 5 days |
-| Per-market-type MIN_EDGE | 2026-04-19 | DONE (Round 4) |
-| Twitter dependency | 2026-05-05 | API depleted, kept paper running on RSS-only. Net positive PnL impact. Twitter re-evaluation deferred to dev env (post-Phase C). |
-
-## Future improvements (post-Phase D scale-up)
-
-### Twitter A/B (in dev env)
-
-Hypothesis: Twitter signals are net-negative based on 19-day sample. Re-test with hybrid gate `TWITTER_MIN_CONFIDENCE_BOOST=0.1` (only execute Twitter-influenced trades if `final_adjusted_confidence >= base + 0.1`).
-
-Run in dev env for 14 days. Compare PnL/Brier to prod (RSS-only). If dev wins → port hybrid gate to prod.
-
-### Cost levers (§2a from old roadmap)
-
-- Cheaper pre-screen model (MiniMax-M2.5 prescreen, M2.7 full eval). Add `PRESCREEN_LLM_MODEL` setting + route `call_prescreen()`. Expected $14/mo → $12/mo.
-
-### Ensemble LLM on high-stakes (§2b)
-
-Requires calibration data. Post-Phase-D when n≥50 per market type.
-
-### Biweekly improvement loop (§3)
-
-Auto-propose hypothesis, manual approval, shadow-mode A/B. Defer until 100+ live trades.
-
-### UI dashboard (§4)
-
-Replace Datasette. Defer. Datasette is sufficient.
+| Cash drift root cause + fix | 2026-06-08 | DONE: atomic `save_trade_with_portfolio` (commit `7a45032`). $792 historical drift cleared by full DB wipe. |
+| Drift monitoring Layers 1+2 | 2026-06-08 | DONE: schema v9 `drift_history` table, 30min APScheduler gauge, `cash_mutation` audit log (commit `1a72d05`) |
+| LLM provider swap MiniMax → MiMo | 2026-06-05 | DONE: configurable `LLM_BASE_URL` + `MIMO_API_KEY` fallback (commit `25bd784`) |
+| `calculate_pnl` formula fix (cost-based) | 2026-06-05 | DONE: `pos*(1-entry)/entry` for BUY_YES wins (commit `8cc1b93`) + reconcile backfill |
+| `calculate_early_exit_pnl` fee deduction | 2026-06-05 | DONE: fee on wins (commit `8338c32`) + backfill (commit `572002b`) |
+| RSS httpx + feedparser UA | 2026-06-03 | DONE: `feedparser/6.0` UA, fixed 3-4 feeds; ESPN regression resolved via UA hotfix |
+| Volume floor $20k | 2026-06-03 | DONE: `MIN_MARKET_VOLUME_24H` cuts 85% of markets pre-LLM |
+| `/no-signal-rss-audit` skill | 2026-06-03 | DONE: diagnostic-only skill |
+| RSS expansion 29 → 44 feeds | 2026-05-29 | DONE: weather, esports, intl politics, geopolitics, regulatory, cultural |
+| Signal cap 7→10 / 3→5 | 2026-05-29 | DONE: prescreen + full eval expanded |
+| SL disable + snapshot table | 2026-05-26 | DONE: `STOP_LOSS_ENABLED` flag + `trade_price_snapshots` table + `scripts/sl_analysis.py` (schema v8) |
+| TP disable + tp_analysis | 2026-06-05 | DONE: `TAKE_PROFIT_ENABLED` flag + `scripts/tp_analysis.py` |
+| Bug 5/6/7/8/9 round | 2026-05-19 → 2026-05-26 | DONE: WS reliability, thin-book guard, observe-only fix, silent stall detection |
 
 ---
 
 ## Long-term reminder
 
-This system is paper-tested but **not yet validated in live**. First 50 live trades are the real validation. Don't add features during Phase C — only fix bugs.
+This system is paper-tested but **not yet validated in live**. First 50 live trades are the real validation. During paper soak: do not add features unless they're monitoring/diagnostics. Treat drift, cash math, label coverage as load-bearing invariants.
 
-After 100 live trades and 4 weeks profitable → consider ensemble LLM, biweekly loop, dashboard.
+After 100 live trades and 4 weeks profitable → ensemble LLM, biweekly loop, dashboard, web_search, critical learning section.
 
---- 
+---
 
-# Prediciton Arena Comparison
+## Prediction Arena comparison (icebox)
 
-- Disable SL or widen to -25% on settlement-bound trades (PA finding: holders outperform early-exit)
-- Add web_search() tool to LLM context (single search per market at full-eval stage). Cheap to add via MiniMax tool-use API if it supports.
-- Replicate "critical learning section" — surface 5 recent losing trades + reasoning in next prompt
+- Add `web_search()` tool to LLM context (single call per market at full-eval). MiMo may support tool-use API.
+- Replicate "critical learning section" — surface 5 recent losing trades + reasoning in next prompt.
