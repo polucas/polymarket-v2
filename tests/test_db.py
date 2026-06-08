@@ -1,6 +1,7 @@
 import pytest
 import pytest_asyncio
 from datetime import datetime, timedelta, timezone
+from structlog.testing import capture_logs
 from src.db.sqlite import Database
 from src.db.migrations import run_migrations
 from src.models import (
@@ -254,6 +255,27 @@ class TestSaveTradeWithPortfolio:
         loaded_portfolio = await db.load_portfolio()
         assert loaded_portfolio is None or loaded_portfolio.cash_balance != 4800.0, \
             "Portfolio must NOT reflect the failed write after rollback"
+
+    async def test_emits_cash_mutation_log(self, db, sample_trade_record):
+        """save_trade_with_portfolio should emit a structured cash_mutation
+        audit log with operation=ENTRY and a delta matching the cash diff."""
+        await db.init_portfolio_if_missing(10000.0)
+
+        record = sample_trade_record(record_id="cash-mutation-test", position_size_usd=200.0)
+        portfolio = Portfolio(cash_balance=9800.0, total_equity=10000.0, total_pnl=0.0)
+
+        with capture_logs() as cap:
+            await db.save_trade_with_portfolio(record, portfolio)
+
+        mutations = [e for e in cap if e.get("event") == "cash_mutation"]
+        assert len(mutations) == 1
+        m = mutations[0]
+        assert m["operation"] == "ENTRY"
+        assert m["trade_id"] == record.record_id
+        assert m["market_id"] == record.market_id
+        assert m["cash_before"] == pytest.approx(10000.0)
+        assert m["cash_after"] == pytest.approx(9800.0)
+        assert m["delta"] == pytest.approx(-200.0)
 
 
 @pytest.mark.asyncio

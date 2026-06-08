@@ -36,9 +36,9 @@ async def _apply_migrations_up_to(conn: aiosqlite.Connection, max_version: int) 
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_8():
-    """SCHEMA_VERSION must be 8 after F8 price snapshot migration."""
-    assert SCHEMA_VERSION == 8
+def test_schema_version_is_9():
+    """SCHEMA_VERSION must be 9 after drift_history migration."""
+    assert SCHEMA_VERSION == 9
 
 
 # ---------------------------------------------------------------------------
@@ -218,3 +218,38 @@ async def test_migration_v8_creates_snapshot_table():
         idx_names = {r[0] for r in idx_rows}
         assert "idx_snapshots_trade" in idx_names
         assert "idx_snapshots_timestamp" in idx_names
+
+
+@pytest.mark.asyncio
+async def test_migration_v9_creates_drift_history_table():
+    """Migration 9 creates drift_history table with required columns and index."""
+    async with aiosqlite.connect(":memory:") as conn:
+        # Apply all migrations up to v9
+        await _apply_migrations_up_to(conn, 9)
+
+        # Check table exists
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='drift_history'"
+        )
+        row = await cursor.fetchone()
+        assert row is not None, "drift_history table should exist after v9 migration"
+
+        # Check required columns via PRAGMA
+        cursor = await conn.execute("PRAGMA table_info(drift_history)")
+        col_rows = await cursor.fetchall()
+        col_names = {r[1] for r in col_rows}
+        required_cols = {
+            "id", "timestamp", "actual_cash", "expected_cash", "drift",
+            "n_entries", "n_exits", "locked_replay",
+        }
+        assert required_cols.issubset(col_names), (
+            f"Missing columns: {required_cols - col_names}"
+        )
+
+        # Check index exists
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='drift_history'"
+        )
+        idx_rows = await cursor.fetchall()
+        idx_names = {r[0] for r in idx_rows}
+        assert "idx_drift_history_ts" in idx_names

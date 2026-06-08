@@ -138,6 +138,14 @@ class Scheduler:
             id="rss_poll",
             max_instances=1,
         )
+        self._scheduler.add_job(
+            self._check_cash_drift_periodic,
+            "interval",
+            minutes=30,
+            id="drift_monitor",
+            name="Cash drift periodic check",
+            max_instances=1,
+        )
         self._scheduler.start()
         log.info("scheduler_started",
                  tier1_interval=self._settings.TIER1_SCAN_INTERVAL_MINUTES,
@@ -195,6 +203,14 @@ class Scheduler:
             await self._rss.poll_and_accumulate()
         except Exception as e:
             log.warning("rss_poll_error", error=str(e))
+
+    async def _check_cash_drift_periodic(self) -> None:
+        """30-min periodic drift gauge."""
+        try:
+            from src.learning.drift_monitor import check_cash_drift_periodic
+            await check_cash_drift_periodic(self._db, self._settings)
+        except Exception as e:
+            log.error("drift_monitor_error", error=str(e))
 
     # ------------------------------------------------------------------
     # Tier 2 activation

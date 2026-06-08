@@ -332,6 +332,7 @@ class RealTimeExitManager:
 
             # Update portfolio
             portfolio = await self.db.load_portfolio()
+            cash_before_exit = portfolio.cash_balance
             portfolio.total_pnl += pnl
             portfolio.cash_balance += trade.position_size_usd + pnl
             portfolio.open_positions = [
@@ -349,6 +350,18 @@ class RealTimeExitManager:
             )
             portfolio.max_drawdown = max(portfolio.max_drawdown, drawdown)
             await self.db.save_portfolio(portfolio)
+            log.info(
+                "cash_mutation",
+                trade_id=trade.record_id,
+                operation="EXIT",
+                market_id=trade.market_id,
+                position_size=round(trade.position_size_usd or 0.0, 4),
+                pnl=round(pnl, 4),
+                cash_before=round(cash_before_exit, 4),
+                cash_after=round(portfolio.cash_balance, 4),
+                delta=round(portfolio.cash_balance - cash_before_exit, 4),
+                exit_type=trade.exit_type,
+            )
 
             # Send Telegram alert
             await send_alert(format_early_exit_alert(trade), self.settings)

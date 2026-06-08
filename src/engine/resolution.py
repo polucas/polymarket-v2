@@ -136,6 +136,7 @@ async def auto_resolve_trades(db: Database, polymarket_client) -> List[TradeReco
             await db.update_trade(trade)
 
             if not already_exited:
+                cash_before_exit = portfolio.cash_balance
                 portfolio.total_pnl += pnl
                 portfolio.cash_balance += trade.position_size_usd + pnl
                 portfolio.total_equity = portfolio.cash_balance + sum(
@@ -150,6 +151,18 @@ async def auto_resolve_trades(db: Database, polymarket_client) -> List[TradeReco
                 drawdown = (portfolio.peak_equity - portfolio.total_equity) / portfolio.peak_equity if portfolio.peak_equity > 0 else 0
                 portfolio.max_drawdown = max(portfolio.max_drawdown, drawdown)
                 await db.save_portfolio(portfolio)
+                log.info(
+                    "cash_mutation",
+                    trade_id=trade.record_id,
+                    operation="EXIT",
+                    market_id=trade.market_id,
+                    position_size=round(trade.position_size_usd or 0.0, 4),
+                    pnl=round(pnl, 4),
+                    cash_before=round(cash_before_exit, 4),
+                    cash_after=round(portfolio.cash_balance, 4),
+                    delta=round(portfolio.cash_balance - cash_before_exit, 4),
+                    exit_type=trade.exit_type,
+                )
 
             resolved_count += 1
             newly_resolved.append(trade)
@@ -272,6 +285,7 @@ async def check_early_exits(
             await db.update_trade(trade)
 
             # Update portfolio
+            cash_before_exit = portfolio.cash_balance
             portfolio.total_pnl += pnl
             portfolio.cash_balance += trade.position_size_usd + pnl
             portfolio.open_positions = [
@@ -285,6 +299,18 @@ async def check_early_exits(
             drawdown = (portfolio.peak_equity - portfolio.total_equity) / portfolio.peak_equity if portfolio.peak_equity > 0 else 0
             portfolio.max_drawdown = max(portfolio.max_drawdown, drawdown)
             await db.save_portfolio(portfolio)
+            log.info(
+                "cash_mutation",
+                trade_id=trade.record_id,
+                operation="EXIT",
+                market_id=trade.market_id,
+                position_size=round(trade.position_size_usd or 0.0, 4),
+                pnl=round(pnl, 4),
+                cash_before=round(cash_before_exit, 4),
+                cash_after=round(portfolio.cash_balance, 4),
+                delta=round(portfolio.cash_balance - cash_before_exit, 4),
+                exit_type=trade.exit_type,
+            )
 
             log.info("early_exit_triggered",
                      market_id=trade.market_id,

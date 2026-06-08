@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 import aiosqlite
+import structlog
 
 from src.models import (
     CalibrationBucket,
@@ -17,6 +18,9 @@ from src.models import (
     TradeRecord,
     CALIBRATION_BUCKET_RANGES,
 )
+
+
+log = structlog.get_logger()
 
 
 def _utcnow() -> datetime:
@@ -102,6 +106,9 @@ class Database:
         Either both writes land, or neither does.
         """
         now = _utcnow().isoformat()
+        async with self._conn.execute("SELECT cash_balance FROM portfolio WHERE id=1") as cur:
+            prev = await cur.fetchone()
+        cash_before = float(prev[0]) if prev else 0.0
         try:
             await self._conn.execute("BEGIN IMMEDIATE")
             await self._conn.execute(
@@ -153,6 +160,19 @@ class Database:
         except Exception:
             await self._conn.rollback()
             raise
+
+        cash_after = p.cash_balance
+        log.info(
+            "cash_mutation",
+            trade_id=r.record_id,
+            operation="ENTRY",
+            market_id=r.market_id,
+            position_size=round(r.position_size_usd or 0.0, 4),
+            action=r.action,
+            cash_before=round(cash_before, 4),
+            cash_after=round(cash_after, 4),
+            delta=round(cash_after - cash_before, 4),
+        )
 
     def _row_to_trade(self, row) -> TradeRecord:
         return TradeRecord(
