@@ -290,8 +290,8 @@ class TestExecuteTradePaper:
         assert record.experiment_run == "test-run"
         assert record.model_used == "grok-3-fast"
         assert record.grok_raw_probability == 0.75
-        # Verify db.save_trade was called
-        mock_db.save_trade.assert_awaited_once()
+        # Verify db.save_trade_with_portfolio was called (atomic save)
+        mock_db.save_trade_with_portfolio.assert_awaited_once()
         # Verify polymarket_client.place_order was NOT called (paper mode)
         mock_client.place_order.assert_not_awaited()
 
@@ -315,8 +315,8 @@ class TestExecuteTradePaper:
             )
 
         assert record is None
-        # db.save_trade should NOT have been called since order was not filled
-        mock_db.save_trade.assert_not_awaited()
+        # db.save_trade_with_portfolio should NOT have been called since order was not filled
+        mock_db.save_trade_with_portfolio.assert_not_awaited()
 
 
 class TestExecuteTradeLive:
@@ -348,7 +348,7 @@ class TestExecuteTradeLive:
             size=200.0,
             side="BUY",
         )
-        mock_db.save_trade.assert_awaited_once()
+        mock_db.save_trade_with_portfolio.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_execute_trade_live_mode_buy_no_uses_no_token(self):
@@ -409,8 +409,8 @@ class TestExecuteTradePortfolioUpdate:
         assert pos.market_id == "mkt-test-001"
         assert pos.side == "BUY_YES"
         assert pos.size_usd == 200.0
-        # save_portfolio should have been called
-        mock_db.save_portfolio.assert_awaited_once()
+        # save_trade_with_portfolio should have been called (atomic save persists portfolio too)
+        mock_db.save_trade_with_portfolio.assert_awaited_once()
 
 
 class TestExecuteTradeOrderbookFieldPersistence:

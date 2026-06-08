@@ -94,6 +94,66 @@ class Database:
         )
         await self._conn.commit()
 
+    async def save_trade_with_portfolio(self, r: TradeRecord, p: Portfolio) -> None:
+        """Atomically save a trade record and updated portfolio in one transaction.
+
+        Used by execute_trade to prevent orphan cash deductions on interrupt
+        (SIGTERM, CancelledError, or exceptions between two separate awaits).
+        Either both writes land, or neither does.
+        """
+        now = _utcnow().isoformat()
+        try:
+            await self._conn.execute("BEGIN IMMEDIATE")
+            await self._conn.execute(
+                """INSERT INTO trade_records (
+                    record_id, experiment_run, timestamp, model_used,
+                    market_id, market_question, market_type, resolution_window_hours, resolution_datetime, tier,
+                    grok_raw_probability, grok_raw_confidence, grok_reasoning, grok_signal_types,
+                    headline_only_signal,
+                    calibration_adjustment, market_type_adjustment, signal_weight_adjustment,
+                    final_adjusted_probability, final_adjusted_confidence,
+                    market_price_at_decision, orderbook_depth_usd, fee_rate, calculated_edge, trade_score,
+                    action, skip_reason, position_size_usd, kelly_fraction_used, market_cluster_id,
+                    actual_outcome, pnl, brier_score_raw, brier_score_adjusted, resolved_at,
+                    unrealized_adverse_move, voided, void_reason,
+                    spread_at_decision, vwap_price, exit_type, exit_price,
+                    clob_token_id_yes, clob_token_id_no,
+                    trade_profitable, pnl_brier_raw, pnl_brier_adjusted
+                ) VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?, ?,?, ?,?,?)""",
+                (
+                    r.record_id, r.experiment_run, _iso(r.timestamp), r.model_used,
+                    r.market_id, r.market_question, r.market_type, r.resolution_window_hours,
+                    _iso(r.resolution_datetime), r.tier,
+                    r.grok_raw_probability, r.grok_raw_confidence, r.grok_reasoning,
+                    json.dumps(r.grok_signal_types), r.headline_only_signal,
+                    r.calibration_adjustment, r.market_type_adjustment, r.signal_weight_adjustment,
+                    r.final_adjusted_probability, r.final_adjusted_confidence,
+                    r.market_price_at_decision, r.orderbook_depth_usd, r.fee_rate,
+                    r.calculated_edge, r.trade_score,
+                    r.action, r.skip_reason, r.position_size_usd, r.kelly_fraction_used,
+                    r.market_cluster_id,
+                    r.actual_outcome, r.pnl, r.brier_score_raw, r.brier_score_adjusted,
+                    _iso(r.resolved_at), r.unrealized_adverse_move, r.voided, r.void_reason,
+                    r.spread_at_decision, r.vwap_price, r.exit_type, r.exit_price,
+                    r.clob_token_id_yes, r.clob_token_id_no,
+                    r.trade_profitable, r.pnl_brier_raw, r.pnl_brier_adjusted,
+                ),
+            )
+            await self._conn.execute(
+                """INSERT INTO portfolio (id, cash_balance, total_equity, total_pnl, peak_equity, max_drawdown, updated_at)
+                   VALUES (1, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                   cash_balance=?, total_equity=?, total_pnl=?, peak_equity=?, max_drawdown=?, updated_at=?""",
+                (
+                    p.cash_balance, p.total_equity, p.total_pnl, p.peak_equity, p.max_drawdown, now,
+                    p.cash_balance, p.total_equity, p.total_pnl, p.peak_equity, p.max_drawdown, now,
+                ),
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
     def _row_to_trade(self, row) -> TradeRecord:
         return TradeRecord(
             record_id=row["record_id"],

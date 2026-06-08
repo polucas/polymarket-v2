@@ -206,6 +206,57 @@ class TestPortfolioInit:
 
 
 @pytest.mark.asyncio
+class TestSaveTradeWithPortfolio:
+    async def test_atomic_save_persists_both(self, db, sample_trade_record):
+        """Both the trade record and the portfolio should be persisted together."""
+        record = sample_trade_record()
+        portfolio = Portfolio(cash_balance=4800.0, total_equity=5200.0, total_pnl=200.0)
+        await db.save_trade_with_portfolio(record, portfolio)
+
+        loaded_trade = await db.get_trade(record.record_id)
+        assert loaded_trade is not None
+        assert loaded_trade.record_id == record.record_id
+        assert loaded_trade.position_size_usd == record.position_size_usd
+
+        loaded_portfolio = await db.load_portfolio()
+        assert loaded_portfolio.cash_balance == 4800.0
+        assert loaded_portfolio.total_equity == 5200.0
+
+    async def test_atomic_rollback_on_failure(self, db, sample_trade_record, monkeypatch):
+        """If the portfolio write raises mid-transaction, the trade write must
+        also be rolled back — neither row should be persisted (no orphan cash
+        deduction without a trade record, and vice versa)."""
+        record = sample_trade_record(record_id="atomic-rollback-test")
+        portfolio = Portfolio(cash_balance=4800.0, total_equity=5200.0, total_pnl=200.0)
+
+        real_execute = db._conn.execute
+        call_count = {"n": 0}
+
+        def _flaky_execute(sql, *args, **kwargs):
+            call_count["n"] += 1
+            # 1st call = BEGIN IMMEDIATE, 2nd = trade INSERT, 3rd = portfolio upsert.
+            # Fail on the portfolio write to simulate a mid-transaction crash.
+            if call_count["n"] == 3:
+                raise RuntimeError("simulated failure during portfolio write")
+            return real_execute(sql, *args, **kwargs)
+
+        monkeypatch.setattr(db._conn, "execute", _flaky_execute)
+
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            await db.save_trade_with_portfolio(record, portfolio)
+
+        # Restore real execute to verify post-rollback state
+        monkeypatch.setattr(db._conn, "execute", real_execute)
+
+        loaded_trade = await db.get_trade("atomic-rollback-test")
+        assert loaded_trade is None, "Trade row must NOT exist after rollback"
+
+        loaded_portfolio = await db.load_portfolio()
+        assert loaded_portfolio is None or loaded_portfolio.cash_balance != 4800.0, \
+            "Portfolio must NOT reflect the failed write after rollback"
+
+
+@pytest.mark.asyncio
 class TestAPICosts:
     async def test_increment_new(self, db):
         await db.increment_api_cost("minimax", tokens_in=1000, tokens_out=200)

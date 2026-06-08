@@ -92,6 +92,49 @@ log = structlog.get_logger()
 _app_state: dict = {}
 
 
+async def check_cash_drift(db: Database, settings: Settings) -> None:
+    """Reconcile cash_balance against a trade-records replay at startup.
+
+    Detects orphan cash deductions (e.g. from interrupts between the old,
+    non-atomic save_portfolio/save_trade calls — see save_trade_with_portfolio).
+    Logs a warning if drift exceeds the $10 threshold; otherwise logs OK.
+    """
+    async with db._conn.execute(
+        "SELECT cash_balance FROM portfolio WHERE id = 1"
+    ) as cur:
+        row = await cur.fetchone()
+    actual_cash = float(row[0]) if row else 0.0
+
+    async with db._conn.execute("""
+        SELECT
+            COALESCE(SUM(position_size_usd), 0) AS deducted,
+            COALESCE(SUM(CASE WHEN actual_outcome IS NOT NULL OR exit_type IS NOT NULL
+                              THEN position_size_usd + pnl ELSE 0 END), 0) AS credited
+        FROM trade_records
+        WHERE action != 'SKIP' AND voided = 0
+    """) as cur:
+        sums = await cur.fetchone()
+
+    initial = settings.INITIAL_BANKROLL
+    replayed = initial - float(sums[0]) + float(sums[1])
+    drift = actual_cash - replayed
+
+    if abs(drift) > 10.0:
+        log.warning(
+            "cash_drift_detected_at_startup",
+            actual_cash=round(actual_cash, 2),
+            replayed_cash=round(replayed, 2),
+            drift=round(drift, 2),
+            threshold=10.0,
+        )
+    else:
+        log.info(
+            "cash_drift_ok",
+            actual_cash=round(actual_cash, 2),
+            drift=round(drift, 2),
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown logic."""
@@ -171,6 +214,7 @@ async def lifespan(app: FastAPI):
     await ws_exit_mgr.start()
 
     await db.init_portfolio_if_missing(settings.INITIAL_BANKROLL)
+    await check_cash_drift(db, settings)
     _app_state.update(
         db=db,
         settings=settings,

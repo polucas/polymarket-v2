@@ -115,19 +115,10 @@ async def execute_trade(
         log.info("order_not_filled", market_id=market.market_id, side=candidate.side)
         return None
 
-    # Update portfolio
-    portfolio.cash_balance -= candidate.position_size
-    portfolio.open_positions.append(Position(
-        market_id=market.market_id,
-        side=candidate.side,
-        entry_price=result.executed_price,
-        size_usd=candidate.position_size,
-        current_value=candidate.position_size,
-        market_cluster_id=candidate.market_cluster_id,
-    ))
-    await db.save_portfolio(portfolio)
-
-    # Create trade record
+    # Build the trade record and the portfolio mutation BEFORE the single atomic
+    # save below. This ensures any pre-save exception (e.g. during TradeRecord
+    # construction) leaves DB state untouched — cash is never deducted without
+    # a corresponding trade row, and vice versa. See save_trade_with_portfolio().
     from src.backtest.clock import Clock
     now = Clock.utcnow()
     record = TradeRecord(
@@ -166,7 +157,17 @@ async def execute_trade(
         vwap_price=candidate.vwap_price,
     )
 
-    await db.save_trade(record)
+    # Mutate portfolio in-memory, then persist both atomically.
+    portfolio.cash_balance -= candidate.position_size
+    portfolio.open_positions.append(Position(
+        market_id=market.market_id,
+        side=candidate.side,
+        entry_price=result.executed_price,
+        size_usd=candidate.position_size,
+        current_value=candidate.position_size,
+        market_cluster_id=candidate.market_cluster_id,
+    ))
+    await db.save_trade_with_portfolio(record, portfolio)
     log.info("trade_executed",
              market_id=market.market_id,
              side=candidate.side,
